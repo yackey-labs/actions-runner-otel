@@ -10,9 +10,21 @@ namespace GitHub.Runner.Worker.Dap
     /// and provides O(1) lookup from <see cref="IStep"/> identity to the current line
     /// in the rendered YAML where that step's <c>- step:</c> key appears.
     ///
-    /// Append-only growth model: post-steps are discovered lazily during execution
-    /// and appended. Setup/pre/main entry line numbers are stable across appends —
-    /// only the synthetic Cleanup boundary (which is not tracked here) shifts.
+    /// Each <see cref="Append"/> can register the entry in one of three modes:
+    ///   - With a non-null <c>stepIdentity</c>: registers the IStep→line mapping
+    ///     immediately. Used for entries whose real <see cref="IStep"/> is already
+    ///     known at append time.
+    ///   - With a non-null <c>matchKey</c>: registers an unclaimed placeholder
+    ///     that a later <see cref="TryClaim"/> binds to a real <see cref="IStep"/>.
+    ///     Used for entries whose <see cref="IStep"/> is materialized later. A
+    ///     placeholder that is never claimed simply stays in the view and is never
+    ///     paused on — the IStep→line mapping is only populated on claim.
+    ///   - With neither: a static entry that needs no line lookup.
+    ///
+    /// <see cref="Append"/> and <see cref="AppendRange"/> never remove or reorder
+    /// existing entries. <see cref="TryClaim"/> does not re-render. The IStep→line
+    /// mapping is rebuilt on every render, so lookups stay accurate even if a later
+    /// Append happens to shift previously-emitted entries.
     /// </summary>
     internal sealed class JobExecutionView
     {
@@ -190,46 +202,6 @@ namespace GitHub.Runner.Worker.Dap
                 _stepIdentities[index] = stepIdentity;
                 _lineByStep[stepIdentity] = _entryStartLines[index];
                 return _entryStartLines[index];
-            }
-        }
-
-        /// <summary>
-        /// Mark a previously-appended unclaimed placeholder as skipped. Used
-        /// when the predicting Main step never runs (skipped by <c>if:</c>),
-        /// so its predicted Post-step placeholder should not appear as a
-        /// step that will execute. Re-renders the view (inline comment only
-        /// — subsequent entry line numbers stay stable).
-        /// </summary>
-        /// <returns>
-        /// true if a matching unclaimed placeholder was marked; false when
-        /// no placeholder exists for <paramref name="matchKey"/>, or the
-        /// placeholder has already been claimed (claim wins).
-        /// </returns>
-        public bool TryMarkSkipped(string matchKey)
-        {
-            ArgUtil.NotNull(matchKey, nameof(matchKey));
-
-            lock (_lock)
-            {
-                if (!_unclaimedByKey.TryGetValue(matchKey, out int index))
-                {
-                    return false;
-                }
-                // Defensive: only mark if it's still an unclaimed placeholder.
-                if (_stepIdentities[index] != null)
-                {
-                    return false;
-                }
-
-                if (_entries[index].IsSkipped)
-                {
-                    // Idempotent — already marked.
-                    return true;
-                }
-                _entries[index].IsSkipped = true;
-                _unclaimedByKey.Remove(matchKey);
-                Render();
-                return true;
             }
         }
 

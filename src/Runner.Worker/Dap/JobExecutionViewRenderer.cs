@@ -88,15 +88,6 @@ namespace GitHub.Runner.Worker.Dap
         public string WithYaml { get; }
         public string Shell { get; }
         public string WorkingDirectory { get; }
-
-        /// <summary>
-        /// Set when the corresponding step was skipped (e.g. predicted Post
-        /// placeholder for a Main step that never executed because its
-        /// <c>if:</c> evaluated false). Rendered as an inline YAML comment
-        /// on the entry's <c>- step:</c> line so subsequent entry line
-        /// numbers stay stable.
-        /// </summary>
-        public bool IsSkipped { get; internal set; }
     }
 
     /// <summary>
@@ -213,11 +204,6 @@ namespace GitHub.Runner.Worker.Dap
                 startLines[i] = newlinesEmitted + 1;
 
                 sb.Append("  - step: ").Append(FormatScalar(entry.DisplayName));
-                if (entry.IsSkipped)
-                {
-                    // Inline comment — keeps following entry line numbers stable.
-                    sb.Append("  # (skipped — main step did not execute)");
-                }
                 sb.Append('\n');
                 newlinesEmitted++;
 

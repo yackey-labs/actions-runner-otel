@@ -585,38 +585,6 @@ namespace GitHub.Runner.Common.Tests.Worker
         [Fact]
         [Trait("Level", "L0")]
         [Trait("Category", "Worker")]
-        public void Render_EmitsSkippedAnnotationForMarkedEntry()
-        {
-            var entry = new JobExecutionViewEntry(JobExecutionPhase.Post, "Post X", uses: "actions/x@v1");
-            entry.IsSkipped = true;
-
-            var result = JobExecutionViewRenderer.Render("j", new[] { entry });
-
-            // Annotation is inline on the `- step:` line so subsequent
-            // entry line numbers stay stable.
-            Assert.Contains("- step: Post X  # (skipped — main step did not execute)\n", result.Yaml);
-        }
-
-        [Fact]
-        [Trait("Level", "L0")]
-        [Trait("Category", "Worker")]
-        public void Render_SkippedAnnotation_DoesNotShiftSubsequentLines()
-        {
-            var skipped = new JobExecutionViewEntry(JobExecutionPhase.Post, "Post A", uses: "actions/a@v1");
-            var following = new JobExecutionViewEntry(JobExecutionPhase.Post, "Post B", uses: "actions/b@v1");
-
-            var unmarked = JobExecutionViewRenderer.Render("j", new[] { skipped, following });
-            skipped.IsSkipped = true;
-            var marked = JobExecutionViewRenderer.Render("j", new[] { skipped, following });
-
-            // Following entry's start line must not move when the prior
-            // entry gets an inline skipped annotation.
-            Assert.Equal(unmarked.EntryStartLines[1], marked.EntryStartLines[1]);
-        }
-
-        [Fact]
-        [Trait("Level", "L0")]
-        [Trait("Category", "Worker")]
         public void Render_AlwaysUsesLfLineBreaks()
         {
             // Regression: YamlDotNet's Emitter calls WriteLine, which on

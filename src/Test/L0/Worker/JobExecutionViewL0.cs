@@ -422,46 +422,5 @@ namespace GitHub.Runner.Common.Tests.Worker
                 Assert.Contains(line.Value, entryLines);
             }
         }
-
-        [Fact]
-        [Trait("Level", "L0")]
-        [Trait("Category", "Worker")]
-        public void TryMarkSkipped_MarksUnclaimedPlaceholder()
-        {
-            var view = new JobExecutionView("j");
-            var postEntry = new JobExecutionViewEntry(JobExecutionPhase.Post, "Post X", uses: "actions/x@v1");
-            view.Append(postEntry, stepIdentity: null, matchKey: "k1");
-
-            Assert.True(view.TryMarkSkipped("k1"));
-            Assert.True(postEntry.IsSkipped);
-            Assert.Contains("(skipped — main step did not execute)", view.Yaml);
-        }
-
-        [Fact]
-        [Trait("Level", "L0")]
-        [Trait("Category", "Worker")]
-        public void TryMarkSkipped_ReturnsFalseForUnknownKey()
-        {
-            var view = new JobExecutionView("j");
-            Assert.False(view.TryMarkSkipped("nope"));
-            Assert.DoesNotContain("(skipped", view.Yaml);
-        }
-
-        [Fact]
-        [Trait("Level", "L0")]
-        [Trait("Category", "Worker")]
-        public void TryMarkSkipped_ReturnsFalseForClaimedPlaceholder()
-        {
-            var view = new JobExecutionView("j");
-            var postEntry = new JobExecutionViewEntry(JobExecutionPhase.Post, "Post X", uses: "actions/x@v1");
-            view.Append(postEntry, stepIdentity: null, matchKey: "k1");
-
-            var step = NewStep("real-post");
-            Assert.NotNull(view.TryClaim("k1", step));
-
-            // Already claimed — must not mark as skipped.
-            Assert.False(view.TryMarkSkipped("k1"));
-            Assert.False(postEntry.IsSkipped);
-        }
     }
 }
