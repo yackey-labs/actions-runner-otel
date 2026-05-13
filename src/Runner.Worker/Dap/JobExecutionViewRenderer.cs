@@ -366,7 +366,14 @@ namespace GitHub.Runner.Worker.Dap
             emitter.Emit(new StreamEnd());
 
             string raw = sw.ToString();
+            // Strip YAML document markers. Emitter elides these for most
+            // scalars but emits "--- " (with space) for some edge cases
+            // (e.g. empty strings). Defensively handle "---\n" too.
             if (raw.StartsWith("--- ", StringComparison.Ordinal))
+            {
+                raw = raw.Substring(4);
+            }
+            else if (raw.StartsWith("---\n", StringComparison.Ordinal))
             {
                 raw = raw.Substring(4);
             }

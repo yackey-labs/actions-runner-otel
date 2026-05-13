@@ -107,8 +107,17 @@ namespace GitHub.Runner.Worker.Dap
             adapter.WriteEnd();
 
             string raw = sw.ToString();
-            // Strip YAML document markers ("--- " prefix and "\n..." suffix).
+            // Strip YAML document markers. The Emitter most commonly elides
+            // these for our use (DocumentStart isImplicit=true), but emits
+            // them for some scalar edge cases (e.g. empty strings) and may
+            // emit them on their own line for collection roots under some
+            // settings. Strip both shapes defensively so callers never see
+            // a leaked marker leak into the embedded fragment.
             if (raw.StartsWith("--- ", StringComparison.Ordinal))
+            {
+                raw = raw.Substring(4);
+            }
+            else if (raw.StartsWith("---\n", StringComparison.Ordinal))
             {
                 raw = raw.Substring(4);
             }

@@ -422,5 +422,21 @@ namespace GitHub.Runner.Common.Tests.Worker
                 Assert.Contains(line.Value, entryLines);
             }
         }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void Append_RejectsBothStepIdentityAndMatchKey()
+        {
+            // Allowing both would orphan the IStep→line mapping the moment
+            // TryClaim overwrites _stepIdentities[index] for a different
+            // step, so the API rejects the combination at append time.
+            var view = new JobExecutionView("j");
+            var entry = new JobExecutionViewEntry(JobExecutionPhase.Post, "Post X", uses: "actions/x@v1");
+            Assert.Throws<ArgumentException>(() =>
+                view.Append(entry, stepIdentity: NewStep("real"), matchKey: "k1"));
+            // State unchanged.
+            Assert.Equal(0, view.EntryCount);
+        }
     }
 }

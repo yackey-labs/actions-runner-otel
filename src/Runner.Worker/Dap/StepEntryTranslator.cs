@@ -16,12 +16,14 @@ namespace GitHub.Runner.Worker.Dap
     internal static class StepEntryTranslator
     {
         // Run-step internals carried on ActionStep.Inputs that are NOT
-        // user-authored `with:` entries.
+        // user-authored `with:` entries. The runner stores these under
+        // the keys defined in PipelineConstants.ScriptStepInputs, NOT
+        // their kebab-case workflow-YAML spellings.
         private static readonly HashSet<string> RunStepInternalKeys = new(StringComparer.Ordinal)
         {
-            "script",
-            "shell",
-            "working-directory",
+            PipelineConstants.ScriptStepInputs.Script,
+            PipelineConstants.ScriptStepInputs.Shell,
+            PipelineConstants.ScriptStepInputs.WorkingDirectory,
         };
 
         /// <summary>
@@ -116,11 +118,11 @@ namespace GitHub.Runner.Worker.Dap
                     var inputs = action.Inputs as MappingToken;
                     if (inputs != null)
                     {
-                        if (TryGetMapValue(inputs, "script", out var scriptTok) && scriptTok != null)
+                        if (TryGetMapValue(inputs, PipelineConstants.ScriptStepInputs.Script, out var scriptTok) && scriptTok != null)
                         {
                             run = scriptTok.ToString();
                         }
-                        if (TryGetMapValue(inputs, "shell", out var shellTok) && shellTok != null)
+                        if (TryGetMapValue(inputs, PipelineConstants.ScriptStepInputs.Shell, out var shellTok) && shellTok != null)
                         {
                             string shellText = shellTok.ToString();
                             if (!string.IsNullOrEmpty(shellText))
@@ -128,7 +130,7 @@ namespace GitHub.Runner.Worker.Dap
                                 shell = shellText;
                             }
                         }
-                        if (TryGetMapValue(inputs, "working-directory", out var wdTok) && wdTok != null)
+                        if (TryGetMapValue(inputs, PipelineConstants.ScriptStepInputs.WorkingDirectory, out var wdTok) && wdTok != null)
                         {
                             string wdText = wdTok.ToString();
                             if (!string.IsNullOrEmpty(wdText))

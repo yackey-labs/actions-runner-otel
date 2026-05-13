@@ -125,20 +125,25 @@ namespace GitHub.Runner.Worker.Dap
         }
 
         /// <summary>
-        /// Append a new entry. If <paramref name="stepIdentity"/> is non-null,
-        /// registers the IStep -> line mapping for later lookup. If
-        /// <paramref name="matchKey"/> is non-null, the entry is registered
-        /// as an unclaimed placeholder that a future
-        /// <see cref="TryClaim(string, IStep)"/> call can bind to a real
-        /// IStep (used by the predictive Post-step path). Re-renders the
-        /// YAML and updates the start-line table.
+        /// Append a new entry. Exactly one of <paramref name="stepIdentity"/>
+        /// or <paramref name="matchKey"/> may be non-null (or both may be
+        /// null for a static entry that needs no line lookup):
+        ///   - <paramref name="stepIdentity"/> non-null: registers the
+        ///     IStep→line mapping immediately. Use when the real
+        ///     <see cref="IStep"/> is known at append time.
+        ///   - <paramref name="matchKey"/> non-null: registers an unclaimed
+        ///     placeholder that a later <see cref="TryClaim"/> binds to a
+        ///     real <see cref="IStep"/>.
+        /// Re-renders the YAML and updates the start-line table.
         /// </summary>
         /// <returns>1-based line number of the newly-appended entry's <c>- step:</c> key.</returns>
         public int Append(JobExecutionViewEntry entry, IStep stepIdentity = null, string matchKey = null)
         {
-            if (entry == null)
+            ArgUtil.NotNull(entry, nameof(entry));
+            if (stepIdentity != null && matchKey != null)
             {
-                throw new ArgumentNullException(nameof(entry));
+                throw new ArgumentException(
+                    "Append cannot register both a step identity and a placeholder match key on the same entry; pass at most one.");
             }
 
             lock (_lock)

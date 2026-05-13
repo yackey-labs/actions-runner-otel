@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using GitHub.DistributedTask.ObjectTemplating.Tokens;
 using GitHub.DistributedTask.Pipelines;
 using GitHub.Runner.Worker;
@@ -244,13 +243,17 @@ namespace GitHub.Runner.Common.Tests.Worker
         [Trait("Category", "Worker")]
         public void Translate_RunStep_ExtractsShellAndWorkingDirectory()
         {
+            // The runner stores run-step inputs under the keys defined in
+            // PipelineConstants.ScriptStepInputs (camelCase), NOT their
+            // kebab-case workflow-YAML spellings — see
+            // ActionManifestManagerWrapper:244.
             var action = new ActionStep
             {
                 Reference = new ScriptReference(),
                 Inputs = Map(
-                    ("script", Str("npm test")),
-                    ("shell", Str("bash")),
-                    ("working-directory", Str("./api"))),
+                    (PipelineConstants.ScriptStepInputs.Script, Str("npm test")),
+                    (PipelineConstants.ScriptStepInputs.Shell, Str("bash")),
+                    (PipelineConstants.ScriptStepInputs.WorkingDirectory, Str("./api"))),
             };
             var mock = NewActionRunnerMock(ActionRunStage.Main, "Run", new ScriptReference(), action);
 
@@ -276,9 +279,9 @@ namespace GitHub.Runner.Common.Tests.Worker
                 Reference = reference,
                 Inputs = Map(
                     ("mode", Str("ci")),
-                    ("script", Str("leak")),
-                    ("shell", Str("leak")),
-                    ("working-directory", Str("leak"))),
+                    (PipelineConstants.ScriptStepInputs.Script, Str("leak")),
+                    (PipelineConstants.ScriptStepInputs.Shell, Str("leak")),
+                    (PipelineConstants.ScriptStepInputs.WorkingDirectory, Str("leak"))),
             };
             var mock = NewActionRunnerMock(ActionRunStage.Main, "Run", reference, action);
 
@@ -288,9 +291,9 @@ namespace GitHub.Runner.Common.Tests.Worker
             Assert.NotNull(entry.WithYaml);
             Assert.Contains("mode: ci", entry.WithYaml);
             Assert.DoesNotContain("leak", entry.WithYaml);
-            Assert.DoesNotContain("script", entry.WithYaml);
-            Assert.DoesNotContain("shell", entry.WithYaml);
-            Assert.DoesNotContain("working-directory", entry.WithYaml);
+            Assert.DoesNotContain(PipelineConstants.ScriptStepInputs.Script, entry.WithYaml);
+            Assert.DoesNotContain(PipelineConstants.ScriptStepInputs.Shell, entry.WithYaml);
+            Assert.DoesNotContain(PipelineConstants.ScriptStepInputs.WorkingDirectory, entry.WithYaml);
         }
 
         [Fact]
