@@ -395,7 +395,6 @@ namespace GitHub.Runner.Worker.Dap
             try
             {
                 Trace.Info("Step completed");
-                JobExecutionView view;
                 lock (_stateLock)
                 {
                     if (_state != DapSessionState.Ready &&
@@ -410,23 +409,6 @@ namespace GitHub.Runner.Worker.Dap
                     if (ReferenceEquals(_currentStep, step))
                     {
                         _currentStep = null;
-                    }
-                    view = _executionView;
-                }
-
-                // If the skipped step was a Main IActionRunner with a predicted
-                // Post-step placeholder, mark that placeholder as skipped so
-                // the view does not advertise a step that will never run.
-                if (view != null &&
-                    step is IActionRunner actionRunner &&
-                    actionRunner.Stage == ActionRunStage.Main &&
-                    actionRunner.Action != null &&
-                    step.ExecutionContext?.Result == TaskResult.Skipped)
-                {
-                    var matchKey = MatchKeyFor(actionRunner.Action.Id);
-                    if (view.TryMarkSkipped(matchKey))
-                    {
-                        SendLoadedSourceEvent("changed");
                     }
                 }
             }

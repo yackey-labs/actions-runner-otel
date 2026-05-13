@@ -656,48 +656,5 @@ namespace GitHub.Runner.Common.Tests.Worker
                 }
             }
         }
-
-        [Fact]
-        [Trait("Level", "L0")]
-        [Trait("Category", "Worker")]
-        public async Task OnStepCompleted_SkippedMainStep_MarksPostPlaceholder()
-        {
-            using (var hc = CreateTestContext())
-            {
-                hc.SetSingleton<IActionManager>(NewActionManagerWithPost("actions/has-post").Object);
-
-                var port = GetFreePort();
-                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var jobContext = CreateJobContextWithTunnel(cts.Token, port);
-                await _debugger.StartAsync(jobContext.Object);
-                try
-                {
-                    await DriveToReadyAsync(_debugger, port);
-
-                    var actionId = Guid.NewGuid();
-                    var mainMock = NewActionRunner(ActionRunStage.Main, "Run actions/has-post@v1", "actions/has-post", "v1", actionId: actionId);
-                    var execCtx = new Mock<IExecutionContext>();
-                    execCtx.SetupGet(x => x.Result).Returns(TaskResult.Skipped);
-                    mainMock.SetupGet(x => x.ExecutionContext).Returns(execCtx.Object);
-
-                    await _debugger.OnJobStepsInitializedAsync(new[] { mainMock.Object }, Array.Empty<IStep>());
-
-                    var view = _debugger.ExecutionView;
-                    Assert.Equal(2, view.EntryCount); // main + predicted post placeholder
-                    Assert.DoesNotContain("(skipped", view.Yaml);
-
-                    _debugger.OnStepCompleted(mainMock.Object);
-
-                    Assert.Equal(2, _debugger.ExecutionView.EntryCount);
-                    Assert.Contains("(skipped — main step did not execute)", _debugger.ExecutionView.Yaml);
-                    // Inline annotation must not have introduced a new line.
-                    Assert.Equal(view.Yaml.Split('\n').Length, _debugger.ExecutionView.Yaml.Split('\n').Length);
-                }
-                finally
-                {
-                    await _debugger.StopAsync();
-                }
-            }
-        }
     }
 }
