@@ -69,10 +69,10 @@ namespace GitHub.Runner.Worker
         }
 
         /// <summary>
-        /// Records the outcome of a job or step on <paramref name="activity"/> using the
-        /// task result. A failed result maps to <see cref="ActivityStatusCode.Error"/>;
-        /// everything else (succeeded, skipped, canceled) maps to
-        /// <see cref="ActivityStatusCode.Ok"/>.
+        /// Records the outcome of a pipeline task or step on <paramref name="activity"/>. The
+        /// tag value follows the OpenTelemetry CICD result vocabulary (success, failure, error,
+        /// timeout, cancellation, skip). A failed or abandoned result also sets the span status
+        /// to <see cref="ActivityStatusCode.Error"/>; other outcomes leave it unset.
         /// </summary>
         public static void SetResult(Activity activity, string resultTag, TaskResult? result)
         {
@@ -82,8 +82,24 @@ namespace GitHub.Runner.Worker
             }
 
             var value = result ?? TaskResult.Succeeded;
-            activity.SetTag(resultTag, value.ToString().ToLowerInvariant());
-            activity.SetStatus(value == TaskResult.Failed ? ActivityStatusCode.Error : ActivityStatusCode.Ok);
+            activity.SetTag(resultTag, MapResult(value));
+            if (value == TaskResult.Failed || value == TaskResult.Abandoned)
+            {
+                activity.SetStatus(ActivityStatusCode.Error, value.ToString());
+            }
         }
+
+        // Maps a runner TaskResult onto the OpenTelemetry CICD result enum.
+        // https://opentelemetry.io/docs/specs/semconv/cicd/
+        private static string MapResult(TaskResult result) => result switch
+        {
+            TaskResult.Succeeded => "success",
+            TaskResult.SucceededWithIssues => "success",
+            TaskResult.Failed => "failure",
+            TaskResult.Canceled => "cancellation",
+            TaskResult.Skipped => "skip",
+            TaskResult.Abandoned => "error",
+            _ => "success",
+        };
     }
 }

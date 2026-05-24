@@ -7,12 +7,21 @@ behaves exactly as upstream and pays no measurable cost.
 
 ## What gets emitted
 
+Attributes follow the OpenTelemetry [CICD](https://opentelemetry.io/docs/specs/semconv/cicd/)
+and [VCS](https://opentelemetry.io/docs/specs/semconv/attributes-registry/vcs/) semantic
+conventions (semconv 1.41, `development` stability). A workflow run maps to a CICD
+pipeline run; the job dispatched to this runner maps to a pipeline task. Steps are finer
+than semconv models, so they keep a `github.step.*` namespace while reusing the CICD
+result vocabulary for their values.
+
 | Span | Kind | Key attributes |
 |------|------|----------------|
-| job  | `Server`   | `github.job`, `github.job.name`, `github.run_id`, `github.run_number`, `github.run_attempt`, `github.repository`, `github.workflow`, `github.actor`, `github.sha`, `github.ref`, `github.job.result` |
+| job  | `Server`   | `cicd.pipeline.name`, `cicd.pipeline.run.id`, `cicd.pipeline.run.url.full`, `cicd.pipeline.task.name`, `cicd.pipeline.task.run.id`, `cicd.pipeline.task.run.result`, `vcs.repository.url.full`, `vcs.repository.name`, `vcs.ref.head.name`, `vcs.ref.head.revision`, `vcs.ref.head.type` |
 | step | `Internal` | `github.step.name`, `github.step.number`, `github.step.type` (`run`/`repository`/`docker`), `github.action`, `github.step.result` |
 
-A failed result sets the span status to `Error`; succeeded/skipped/canceled set `Ok`.
+Results use the CICD vocabulary (`success`, `failure`, `error`, `cancellation`, `skip`).
+A `failure` (failed step/task) or `error` (abandoned, e.g. worker killed) also sets the
+span status to `Error`; other outcomes leave it unset.
 
 Each step's W3C trace context is published to that step's environment as `TRACEPARENT`,
 so instrumented build tooling (test runners, `docker build`, custom CLIs) emits **child
@@ -60,8 +69,11 @@ template:
           - name: OTEL_SERVICE_NAME
             value: "github.actions.runner"
           - name: OTEL_RESOURCE_ATTRIBUTES
-            value: "k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE),k8s.node.name=$(NODE_NAME)"
+            value: "k8s.pod.name=$(POD_NAME),k8s.namespace.name=$(POD_NAMESPACE),k8s.node.name=$(NODE_NAME),cicd.worker.id=$(POD_NAME),cicd.worker.name=$(POD_NAME)"
 ```
+
+The worker identity (`cicd.worker.*`) is supplied as a resource attribute rather than set
+in runner code, so the runner stays host-agnostic and ops can change it without a rebuild.
 
 > The OTLP traces pipeline must accept the runner namespace. If your collector drops
 > the `arc-runners` namespace on the **logs** pipeline (to suppress verbose runner

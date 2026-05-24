@@ -266,7 +266,7 @@ namespace GitHub.Runner.Worker
             {
                 // Record the final job outcome on the span. By this point the job context has
                 // been completed (inside CompleteJobAsync), so its result is authoritative.
-                CiTracing.SetResult(jobActivity, "github.job.result", jobContext?.Result);
+                CiTracing.SetResult(jobActivity, "cicd.pipeline.task.run.result", jobContext?.Result);
 
                 if (runnerShutdownRegistration != null)
                 {
@@ -278,6 +278,10 @@ namespace GitHub.Runner.Worker
             }
         }
 
+        // Tags the job span using the OpenTelemetry CICD and VCS semantic conventions
+        // (semconv 1.41, development). A GitHub Actions workflow run maps to a CICD pipeline
+        // run; the job dispatched to this runner maps to a pipeline task. Steps are finer than
+        // semconv models, so they carry github.step.* attributes in StepsRunner.
         private static void PopulateJobActivityTags(Activity activity, IExecutionContext jobContext, Pipelines.AgentJobRequestMessage message)
         {
             if (activity == null)
@@ -285,16 +289,55 @@ namespace GitHub.Runner.Worker
                 return;
             }
 
-            activity.SetTag("github.job", jobContext.GetGitHubContext("job"));
-            activity.SetTag("github.job.name", message.JobDisplayName);
-            activity.SetTag("github.run_id", jobContext.GetGitHubContext("run_id"));
-            activity.SetTag("github.run_number", jobContext.GetGitHubContext("run_number"));
-            activity.SetTag("github.run_attempt", jobContext.GetGitHubContext("run_attempt"));
-            activity.SetTag("github.repository", jobContext.GetGitHubContext("repository"));
-            activity.SetTag("github.workflow", jobContext.GetGitHubContext("workflow"));
-            activity.SetTag("github.actor", jobContext.GetGitHubContext("actor"));
-            activity.SetTag("github.sha", jobContext.GetGitHubContext("sha"));
-            activity.SetTag("github.ref", jobContext.GetGitHubContext("ref"));
+            var serverUrl = jobContext.GetGitHubContext("server_url");
+            var repository = jobContext.GetGitHubContext("repository");
+            var runId = jobContext.GetGitHubContext("run_id");
+            var runAttempt = jobContext.GetGitHubContext("run_attempt");
+
+            // Pipeline run = workflow run.
+            activity.SetTag("cicd.pipeline.name", jobContext.GetGitHubContext("workflow"));
+            activity.SetTag("cicd.pipeline.run.id", runId);
+            activity.SetTag("cicd.pipeline.run.url.full", BuildRunUrl(serverUrl, repository, runId, runAttempt));
+
+            // Pipeline task = the job dispatched to this runner.
+            activity.SetTag("cicd.pipeline.task.name", message.JobDisplayName);
+            activity.SetTag("cicd.pipeline.task.run.id", message.JobId.ToString());
+
+            // Source under test.
+            if (!string.IsNullOrEmpty(serverUrl) && !string.IsNullOrEmpty(repository))
+            {
+                activity.SetTag("vcs.repository.url.full", $"{serverUrl}/{repository}");
+            }
+            activity.SetTag("vcs.repository.name", RepositoryName(repository));
+            activity.SetTag("vcs.ref.head.name", jobContext.GetGitHubContext("ref_name"));
+            activity.SetTag("vcs.ref.head.revision", jobContext.GetGitHubContext("sha"));
+            activity.SetTag("vcs.ref.head.type", jobContext.GetGitHubContext("ref_type"));
+        }
+
+        // The short repository name without the owner (semconv vcs.repository.name).
+        private static string RepositoryName(string repository)
+        {
+            if (string.IsNullOrEmpty(repository))
+            {
+                return null;
+            }
+            var slash = repository.LastIndexOf('/');
+            return slash >= 0 ? repository.Substring(slash + 1) : repository;
+        }
+
+        // The browser URL of a workflow run, e.g. https://github.com/owner/repo/actions/runs/42.
+        private static string BuildRunUrl(string serverUrl, string repository, string runId, string runAttempt)
+        {
+            if (string.IsNullOrEmpty(serverUrl) || string.IsNullOrEmpty(repository) || string.IsNullOrEmpty(runId))
+            {
+                return null;
+            }
+            var url = $"{serverUrl}/{repository}/actions/runs/{runId}";
+            if (!string.IsNullOrEmpty(runAttempt) && runAttempt != "1")
+            {
+                url += $"/attempts/{runAttempt}";
+            }
+            return url;
         }
 
         private async Task<TaskResult> CompleteJobAsync(IRunnerService server, IExecutionContext jobContext, Pipelines.AgentJobRequestMessage message, TaskResult? taskResult = null)

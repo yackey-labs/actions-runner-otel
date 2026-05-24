@@ -43,17 +43,21 @@ namespace GitHub.Runner.Common.Tests.Worker
         [Theory]
         [Trait("Level", "L0")]
         [Trait("Category", "Worker")]
-        [InlineData(TaskResult.Succeeded, "succeeded", ActivityStatusCode.Ok)]
-        [InlineData(TaskResult.Skipped, "skipped", ActivityStatusCode.Ok)]
-        [InlineData(TaskResult.Canceled, "canceled", ActivityStatusCode.Ok)]
-        [InlineData(TaskResult.Failed, "failed", ActivityStatusCode.Error)]
+        // Tag values follow the OpenTelemetry CICD result vocabulary; only failure/error
+        // (a failed step or an abandoned/worker-killed run) sets the span status to Error.
+        [InlineData(TaskResult.Succeeded, "success", ActivityStatusCode.Unset)]
+        [InlineData(TaskResult.SucceededWithIssues, "success", ActivityStatusCode.Unset)]
+        [InlineData(TaskResult.Skipped, "skip", ActivityStatusCode.Unset)]
+        [InlineData(TaskResult.Canceled, "cancellation", ActivityStatusCode.Unset)]
+        [InlineData(TaskResult.Failed, "failure", ActivityStatusCode.Error)]
+        [InlineData(TaskResult.Abandoned, "error", ActivityStatusCode.Error)]
         public void SetResult_MapsResultToTagAndStatus(TaskResult result, string expectedTag, ActivityStatusCode expectedStatus)
         {
             using var traced = new TracedActivity();
 
-            CiTracing.SetResult(traced.Activity, "github.step.result", result);
+            CiTracing.SetResult(traced.Activity, "cicd.pipeline.task.run.result", result);
 
-            Assert.Equal(expectedTag, traced.Activity.GetTagItem("github.step.result"));
+            Assert.Equal(expectedTag, traced.Activity.GetTagItem("cicd.pipeline.task.run.result"));
             Assert.Equal(expectedStatus, traced.Activity.Status);
         }
 
@@ -64,10 +68,10 @@ namespace GitHub.Runner.Common.Tests.Worker
         {
             using var traced = new TracedActivity();
 
-            CiTracing.SetResult(traced.Activity, "github.step.result", null);
+            CiTracing.SetResult(traced.Activity, "cicd.pipeline.task.run.result", null);
 
-            Assert.Equal("succeeded", traced.Activity.GetTagItem("github.step.result"));
-            Assert.Equal(ActivityStatusCode.Ok, traced.Activity.Status);
+            Assert.Equal("success", traced.Activity.GetTagItem("cicd.pipeline.task.run.result"));
+            Assert.Equal(ActivityStatusCode.Unset, traced.Activity.Status);
         }
 
         [Fact]
@@ -79,31 +83,21 @@ namespace GitHub.Runner.Common.Tests.Worker
             CiTracing.SetResult(null, "github.step.result", TaskResult.Failed);
         }
 
-        // Attaches a sampling listener to CiTracing.Source so StartActivity returns a live
-        // Activity, and removes the listener on dispose so it does not leak into other tests.
+        // A started, recording Activity for exercising SetResult. Constructor-created
+        // activities always store tags and status, so this needs no ActivitySource listener —
+        // keeping the test deterministic regardless of process-global listener state.
         private sealed class TracedActivity : IDisposable
         {
-            private readonly ActivityListener _listener;
-
             public Activity Activity { get; }
 
             public TracedActivity()
             {
-                _listener = new ActivityListener
-                {
-                    ShouldListenTo = source => source == CiTracing.Source,
-                    Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded
-                };
-                ActivitySource.AddActivityListener(_listener);
-
-                Activity = CiTracing.Source.StartActivity("test");
-                Assert.NotNull(Activity);
+                Activity = new Activity("test").Start();
             }
 
             public void Dispose()
             {
-                Activity?.Dispose();
-                _listener.Dispose();
+                Activity.Dispose();
             }
         }
     }
