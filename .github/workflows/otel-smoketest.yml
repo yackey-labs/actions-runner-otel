@@ -1,0 +1,19 @@
+name: otel-smoketest
+
+# Manual canary for the OpenTelemetry-enabled runner on arc-runner-set-small.
+# Runs a few trivial steps so the runner emits a job span + several step spans,
+# and echoes TRACEPARENT to confirm the per-step trace context is injected.
+# No untrusted input is used in any run: step (no injection surface).
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: arc-runner-set-small
+    steps:
+      - name: Hello
+        run: echo "otel smoke test on $(hostname)"
+      - name: Show injected trace context
+        run: echo "TRACEPARENT=${TRACEPARENT:-<unset>}"
+      - name: Brief work
+        run: sleep 3
