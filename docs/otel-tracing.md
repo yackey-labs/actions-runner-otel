@@ -34,6 +34,93 @@ and the runner overlays this per-step `TRACEPARENT` on top. Any tool that is its
 OpenTelemetry-instrumented therefore exports to the same collector and parents to its step
 automatically. Tools that are not instrumented are unaffected.
 
+## Cross-workflow trace propagation
+
+When one instrumented job triggers another via `workflow_dispatch` or `workflow_call`,
+the runner stitches the two workflow runs into a single trace automatically — as long as
+the caller passes `TRACEPARENT` as a dispatch input and the callee declares it.
+
+### Caller workflow
+
+The step that triggers the downstream workflow already has `TRACEPARENT` set in its
+environment by the runner. Pass it as a dispatch input:
+
+```yaml
+- name: Dispatch deployment
+  env:
+    INFRA_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+    IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+  run: |
+    curl -fsS -X POST \
+      -H "Authorization: token ${INFRA_TOKEN}" \
+      -H "Content-Type: application/json" \
+      "https://api.github.com/repos/org/infra/actions/workflows/deploy.yml/dispatches" \
+      -d "{
+        \"ref\": \"main\",
+        \"inputs\": {
+          \"image_tag\": \"${IMAGE_TAG}\",
+          \"traceparent\": \"${TRACEPARENT}\"
+        }
+      }"
+```
+
+`gh workflow run` works the same way:
+
+```yaml
+- run: |
+    gh workflow run deploy.yml \
+      --ref main \
+      --field image_tag="${IMAGE_TAG}" \
+      --field traceparent="${TRACEPARENT}"
+```
+
+### Called workflow
+
+Declare `traceparent` as an optional `workflow_dispatch` input. No other changes are
+needed — the runner reads it automatically and starts the job span as a child of the
+upstream step span.
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        required: true
+        type: string
+      traceparent:
+        description: "W3C traceparent for distributed tracing"
+        required: false
+        type: string
+```
+
+The `tracestate` W3C header is also supported as an optional input under the key
+`tracestate`, if the caller propagates it.
+
+### Resulting trace shape
+
+```
+ci / build job
+  └── step: dispatch deployment           ← TRACEPARENT set here by runner
+        ↓  (remote parent via inputs.traceparent)
+infra / deploy job                        ← job span parented to the step above
+  └── step: update manifests
+  └── step: commit and push
+  └── step: wait for rollout
+```
+
+Both workflow runs share the same `traceId`, so a single trace view in Honeycomb or
+any other backend shows the full build → deploy pipeline without any manual span
+construction.
+
+### How it works
+
+Before starting the job span the runner reads `message.ContextData["inputs"]` — the
+same data that populates `${{ inputs.traceparent }}` in YAML. If the value parses as a
+valid W3C traceparent, the job span is started with that as its remote parent
+(`ActivityContext.TryParse(..., isRemote: true)`). If the input is absent, empty, or
+malformed the runner falls back to a new root span, so the called workflow degrades
+gracefully when triggered manually or by other events.
+
 ## Configuration
 
 All configuration uses the standard OpenTelemetry environment variables read by the
