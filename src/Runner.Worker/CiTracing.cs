@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using GitHub.DistributedTask.Pipelines.ContextData;
 using GitHub.DistributedTask.WebApi;
 using GitHub.Runner.Sdk;
 using OpenTelemetry;
@@ -87,6 +89,47 @@ namespace GitHub.Runner.Worker
             {
                 activity.SetStatus(ActivityStatusCode.Error, value.ToString());
             }
+        }
+
+        /// <summary>
+        /// Extracts a remote <see cref="ActivityContext"/> from <paramref name="contextData"/> when
+        /// the job was dispatched with a W3C <c>traceparent</c> input. Returns
+        /// <see langword="default"/> if no valid trace context is present.
+        ///
+        /// Callers pass a <c>traceparent</c> (and optionally <c>tracestate</c>) via
+        /// <c>workflow_dispatch</c> or <c>workflow_call</c> inputs so that the downstream job
+        /// span becomes a child of the upstream step span, stitching cross-workflow runs into
+        /// a single trace.
+        ///
+        /// The inputs live at the top-level <c>inputs</c> key of the job's context data —
+        /// the same source that populates <c>${{ inputs.traceparent }}</c> in workflow YAML.
+        /// </summary>
+        public static ActivityContext TryExtractRemoteParent(IDictionary<string, PipelineContextData> contextData)
+        {
+            if (contextData == null ||
+                !contextData.TryGetValue("inputs", out var inputsRaw) ||
+                inputsRaw is not DictionaryContextData inputs)
+            {
+                return default;
+            }
+
+            if (!inputs.TryGetValue("traceparent", out var traceparentRaw))
+            {
+                return default;
+            }
+
+            var traceparent = traceparentRaw?.ToString();
+            if (string.IsNullOrEmpty(traceparent))
+            {
+                return default;
+            }
+
+            inputs.TryGetValue("tracestate", out var tracestateRaw);
+            var tracestate = tracestateRaw?.ToString();
+
+            return ActivityContext.TryParse(traceparent, tracestate, isRemote: true, out var ctx)
+                ? ctx
+                : default;
         }
 
         // Maps a runner TaskResult onto the OpenTelemetry CICD result enum.

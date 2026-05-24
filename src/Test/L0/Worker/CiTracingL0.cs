@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using GitHub.DistributedTask.Pipelines.ContextData;
 using GitHub.DistributedTask.WebApi;
 using GitHub.Runner.Worker;
 using Xunit;
@@ -105,6 +107,118 @@ namespace GitHub.Runner.Common.Tests.Worker
         {
             // Mirrors the disabled-tracing path: callers pass the null activity straight through.
             CiTracing.SetResult(null, "github.step.result", TaskResult.Failed);
+        }
+
+        // ── TryExtractRemoteParent ──────────────────────────────────────────────
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsDefault_WhenContextDataIsNull()
+        {
+            var result = CiTracing.TryExtractRemoteParent(null);
+            Assert.Equal(default, result);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsDefault_WhenInputsKeyAbsent()
+        {
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase);
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+            Assert.Equal(default, result);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsDefault_WhenTraceparentInputAbsent()
+        {
+            var inputs = new DictionaryContextData();
+            inputs.Add("some_other_input", new StringContextData("value"));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["inputs"] = inputs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+            Assert.Equal(default, result);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsDefault_WhenTraceparentIsEmpty()
+        {
+            var inputs = new DictionaryContextData();
+            inputs.Add("traceparent", new StringContextData(string.Empty));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["inputs"] = inputs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+            Assert.Equal(default, result);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsDefault_WhenTraceparentIsInvalid()
+        {
+            var inputs = new DictionaryContextData();
+            inputs.Add("traceparent", new StringContextData("not-a-valid-traceparent"));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["inputs"] = inputs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+            Assert.Equal(default, result);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsParsedContext_WhenValidTraceparent()
+        {
+            const string traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+            var inputs = new DictionaryContextData();
+            inputs.Add("traceparent", new StringContextData(traceparent));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["inputs"] = inputs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+
+            Assert.NotEqual(default, result);
+            Assert.Equal(ActivityTraceId.CreateFromString("4bf92f3577b34da6a3ce929d0e0e4736"), result.TraceId);
+            Assert.Equal(ActivitySpanId.CreateFromString("00f067aa0ba902b7"), result.SpanId);
+            Assert.True(result.IsRemote);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_PreservesTracestate_WhenPresent()
+        {
+            const string traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+            const string tracestate = "vendor1=abc,vendor2=def";
+            var inputs = new DictionaryContextData();
+            inputs.Add("traceparent", new StringContextData(traceparent));
+            inputs.Add("tracestate", new StringContextData(tracestate));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["inputs"] = inputs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+
+            Assert.NotEqual(default, result);
+            Assert.Equal(tracestate, result.TraceState);
+            Assert.True(result.IsRemote);
         }
 
         // A started, recording Activity for exercising SetResult. Constructor-created

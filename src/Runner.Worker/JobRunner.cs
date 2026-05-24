@@ -117,7 +117,14 @@ namespace GitHub.Runner.Worker
             // Optional root span for the whole job. Null (a no-op) unless OTel tracing is
             // configured; when present, it is the parent of every step span and its result is
             // recorded in the finally block below.
-            using Activity jobActivity = CiTracing.Source.StartActivity(message.JobDisplayName ?? "job", ActivityKind.Server);
+            //
+            // If the job was dispatched with a W3C traceparent input (workflow_dispatch or
+            // workflow_call), start the span as a child of that remote context so cross-workflow
+            // runs stitch into a single trace.
+            ActivityContext remoteParent = CiTracing.TryExtractRemoteParent(message.ContextData);
+            using Activity jobActivity = remoteParent != default
+                ? CiTracing.Source.StartActivity(message.JobDisplayName ?? "job", ActivityKind.Server, remoteParent)
+                : CiTracing.Source.StartActivity(message.JobDisplayName ?? "job", ActivityKind.Server);
             try
             {
                 // Create the job execution context.
