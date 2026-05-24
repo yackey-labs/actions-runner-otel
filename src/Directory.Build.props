@@ -66,4 +66,18 @@
     <!-- Report low, moderate, high and critical advisories -->
     <NuGetAuditLevel>moderate</NuGetAuditLevel>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OpenTelemetry is pinned to 1.9.0 in Runner.Worker for net8.0 self-contained
+         compatibility (newer releases require a DiagnosticSource the layout cannot ship).
+         These two advisories are not reachable from the runner's export-only OTel usage and
+         are suppressed repo-wide so transitive consumers (e.g. the test project) also audit
+         clean:
+         - GHSA-g94r-2vxg-569j: excessive allocation parsing inbound propagation headers. The
+           runner never extracts trace context from untrusted input.
+         - GHSA-4625-4j76-fww9: OTLP exporter disk-retry temp-path injection. The runner uses
+           the default exporter with no persistent/disk buffering. -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-g94r-2vxg-569j" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-4625-4j76-fww9" />
+  </ItemGroup>
 </Project>

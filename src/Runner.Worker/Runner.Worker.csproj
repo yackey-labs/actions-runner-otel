@@ -39,20 +39,6 @@
     </EmbeddedResource>
   </ItemGroup>
 
-  <ItemGroup>
-    <!-- These OpenTelemetry advisories are not reachable from how the runner uses the SDK,
-         which is export-only: it creates spans and ships them via OTLP.
-         - GHSA-g94r-2vxg-569j: excessive allocation parsing inbound propagation headers.
-           The runner never extracts trace context from untrusted input; it injects its own
-           computed TRACEPARENT into step environments.
-         - GHSA-4625-4j76-fww9: OTLP exporter disk-retry temp-path injection. The runner uses
-           the default AddOtlpExporter() with no persistent/disk buffering.
-         The only release patching both (1.15.3) requires DiagnosticSource 10, which is
-         incompatible with this net8.0 self-contained layout (see the package note above). -->
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-g94r-2vxg-569j" />
-    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-4625-4j76-fww9" />
-  </ItemGroup>
-
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
     <DebugType>portable</DebugType>
   </PropertyGroup>
