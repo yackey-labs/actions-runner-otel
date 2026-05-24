@@ -31,6 +31,30 @@ namespace GitHub.Runner.Common.Tests.Worker
         [Fact]
         [Trait("Level", "L0")]
         [Trait("Category", "Worker")]
+        public void TryCreateTracerProvider_BuildsProvider_WhenEndpointConfigured()
+        {
+            // Exercises the real OpenTelemetry assembly load and provider construction.
+            // Guards against transitive-dependency mismatches (e.g. a DiagnosticSource
+            // version the self-contained runtime does not ship) that only surface when the
+            // provider is actually built, not at compile time.
+            var original = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+            try
+            {
+                Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
+
+                using var provider = CiTracing.TryCreateTracerProvider();
+
+                Assert.NotNull(provider);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", original);
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
         public void StartActivity_ReturnsNull_WhenNoListener()
         {
             // With no provider built (and therefore no listener on the source), starting an
