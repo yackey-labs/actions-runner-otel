@@ -4,12 +4,14 @@ name: otel-smoketest
 # Runs a few trivial steps so the runner emits a job span + several step spans,
 # and echoes TRACEPARENT to confirm the per-step trace context is injected.
 # No untrusted input is used in any run: step (no injection surface).
+# A job container is required: this pool runs with ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER.
 on:
   workflow_dispatch:
 
 jobs:
   smoke:
     runs-on: arc-runner-set-small
+    container: alpine:3.20
     steps:
       - name: Hello
         run: echo "otel smoke test on $(hostname)"
