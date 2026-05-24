@@ -1,16 +1,20 @@
 name: otel-smoketest
 
-# Manual canary for the OpenTelemetry-enabled runner on arc-runner-set-small.
-# Runs a few trivial steps so the runner emits a job span + several step spans,
-# and echoes TRACEPARENT to confirm the per-step trace context is injected.
-# No untrusted input is used in any run: step (no injection surface).
-# A job container is required: this pool runs with ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER.
+# Manual canary for the OpenTelemetry-enabled runner. Runs a few trivial steps so
+# the runner emits a job span + step spans, and echoes TRACEPARENT to confirm the
+# per-step trace context is injected. No untrusted input is used in any run: step.
+# A job container is required (the pools set ACTIONS_RUNNER_REQUIRE_JOB_CONTAINER).
 on:
   workflow_dispatch:
+    inputs:
+      runner:
+        description: Runner scale-set label to target
+        default: arc-runner-set
+        type: string
 
 jobs:
   smoke:
-    runs-on: arc-runner-set-small
+    runs-on: ${{ inputs.runner }}
     container: alpine:3.20
     steps:
       - name: Hello
