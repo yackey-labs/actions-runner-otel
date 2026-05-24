@@ -1,0 +1,8 @@
+# Build artifacts and the locally-downloaded SDK — the image build compiles
+# fresh inside the SDK stage, so these only bloat the build context.
+_layout
+_dotnetsdk
+_downloads
+_package
+**/bin
+**/obj
