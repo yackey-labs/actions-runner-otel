@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using GitHub.DistributedTask.Expressions2;
@@ -51,6 +52,7 @@ namespace GitHub.Runner.Worker
             jobContext.JobContext.Status = (jobContext.Result ?? TaskResult.Succeeded).ToActionResult();
             var scopeInputs = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase);
             bool checkPostJobActions = false;
+            int stepNumber = 0;
             var dapDebugger = HostContext.GetService<IDapDebugger>();
             while (jobContext.JobSteps.Count > 0 || !checkPostJobActions)
             {
@@ -74,6 +76,22 @@ namespace GitHub.Runner.Worker
 
                 // Start
                 step.ExecutionContext.Start();
+
+                // Optional child span for this step. Null (a no-op) unless OTel tracing is
+                // configured. Scoped to the loop body, so it is disposed (and the span ended)
+                // on every exit path of this iteration. Its parent is the job span made
+                // current in JobRunner.
+                using Activity stepActivity = CiTracing.Source.StartActivity(step.DisplayName ?? "step", ActivityKind.Internal);
+                stepActivity?.SetTag("github.step.name", step.DisplayName);
+                stepActivity?.SetTag("github.step.number", ++stepNumber);
+
+                // Publish this step's W3C trace context so tooling the step invokes nests under
+                // the step span (not just the job). This runs before the env merge below, so the
+                // value reaches the step's subprocess environment.
+                if (stepActivity?.Id != null)
+                {
+                    step.ExecutionContext.Global.EnvironmentVariables[CiTracing.TraceParentVariable] = stepActivity.Id;
+                }
 
                 // Expression functions
                 step.ExecutionContext.ExpressionFunctions.Add(new FunctionInfo<AlwaysFunction>(PipelineTemplateConstants.Always, 0, 0));
@@ -261,6 +279,13 @@ namespace GitHub.Runner.Worker
                 }
 
                 Trace.Info($"Current state: job state = '{jobContext.Result}'");
+
+                // Record the step outcome on the span before the iteration scope ends. The
+                // telemetry type/action ref are populated while the step runs, so they are
+                // only available now.
+                stepActivity?.SetTag("github.step.type", step.ExecutionContext.StepTelemetry?.Type);
+                stepActivity?.SetTag("github.action", step.ExecutionContext.StepTelemetry?.Action);
+                CiTracing.SetResult(stepActivity, "github.step.result", step.ExecutionContext.Result);
             }
 
         }

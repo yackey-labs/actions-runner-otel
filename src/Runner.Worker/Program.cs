@@ -11,6 +11,9 @@ namespace GitHub.Runner.Worker
     {
         public static int Main(string[] args)
         {
+            // Optional OpenTelemetry tracing of the job. Null (a no-op) unless an OTLP
+            // endpoint is configured; disposed last so buffered spans are flushed on exit.
+            using (var tracerProvider = CiTracing.TryCreateTracerProvider())
             using (HostContext context = new("Worker"))
             {
                 return MainAsync(context, args).GetAwaiter().GetResult();

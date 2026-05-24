@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -112,6 +113,11 @@ namespace GitHub.Runner.Worker
 
             IExecutionContext jobContext = null;
             CancellationTokenRegistration? runnerShutdownRegistration = null;
+
+            // Optional root span for the whole job. Null (a no-op) unless OTel tracing is
+            // configured; when present, it is the parent of every step span and its result is
+            // recorded in the finally block below.
+            using Activity jobActivity = CiTracing.Source.StartActivity(message.JobDisplayName ?? "job", ActivityKind.Server);
             try
             {
                 // Create the job execution context.
@@ -120,6 +126,10 @@ namespace GitHub.Runner.Worker
                 Trace.Info("Starting the job execution context.");
                 jobContext.Start();
                 jobContext.Debug($"Starting: {message.JobDisplayName}");
+
+                // Tag the job span. It is the activity-context root for the job, so every step
+                // span (and the trace context published per step) nests beneath it.
+                PopulateJobActivityTags(jobActivity, jobContext, message);
 
                 runnerShutdownRegistration = HostContext.RunnerShutdownToken.Register(() =>
                 {
@@ -254,6 +264,10 @@ namespace GitHub.Runner.Worker
             }
             finally
             {
+                // Record the final job outcome on the span. By this point the job context has
+                // been completed (inside CompleteJobAsync), so its result is authoritative.
+                CiTracing.SetResult(jobActivity, "github.job.result", jobContext?.Result);
+
                 if (runnerShutdownRegistration != null)
                 {
                     runnerShutdownRegistration.Value.Dispose();
@@ -262,6 +276,25 @@ namespace GitHub.Runner.Worker
 
                 await ShutdownQueue(throwOnFailure: false);
             }
+        }
+
+        private static void PopulateJobActivityTags(Activity activity, IExecutionContext jobContext, Pipelines.AgentJobRequestMessage message)
+        {
+            if (activity == null)
+            {
+                return;
+            }
+
+            activity.SetTag("github.job", jobContext.GetGitHubContext("job"));
+            activity.SetTag("github.job.name", message.JobDisplayName);
+            activity.SetTag("github.run_id", jobContext.GetGitHubContext("run_id"));
+            activity.SetTag("github.run_number", jobContext.GetGitHubContext("run_number"));
+            activity.SetTag("github.run_attempt", jobContext.GetGitHubContext("run_attempt"));
+            activity.SetTag("github.repository", jobContext.GetGitHubContext("repository"));
+            activity.SetTag("github.workflow", jobContext.GetGitHubContext("workflow"));
+            activity.SetTag("github.actor", jobContext.GetGitHubContext("actor"));
+            activity.SetTag("github.sha", jobContext.GetGitHubContext("sha"));
+            activity.SetTag("github.ref", jobContext.GetGitHubContext("ref"));
         }
 
         private async Task<TaskResult> CompleteJobAsync(IRunnerService server, IExecutionContext jobContext, Pipelines.AgentJobRequestMessage message, TaskResult? taskResult = null)
