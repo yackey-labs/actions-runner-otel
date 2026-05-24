@@ -26,8 +26,13 @@ span status to `Error`; other outcomes leave it unset.
 Each step's W3C trace context is published to that step's environment as `TRACEPARENT`,
 so instrumented build tooling (test runners, `docker build`, custom CLIs) emits **child
 spans of the step that ran them** rather than disconnected traces. The step spans in turn
-nest under the job span, giving a single job → step → tool tree. See the
-`yackey-labs/ci-trace` action for a convenient way to consume it.
+nest under the job span, giving a single job → step → tool tree.
+
+No workflow changes are required: a step's subprocess inherits the runner's own
+environment — including the `OTEL_*` exporter configuration set on the runner (see below) —
+and the runner overlays this per-step `TRACEPARENT` on top. Any tool that is itself
+OpenTelemetry-instrumented therefore exports to the same collector and parents to its step
+automatically. Tools that are not instrumented are unaffected.
 
 ## Configuration
 
