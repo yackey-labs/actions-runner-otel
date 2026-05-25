@@ -1,0 +1,51 @@
+name: Build OTel runner image
+
+# Separate from the upstream build.yml so upstream syncs never conflict.
+# Triggered on every push to main; builds and pushes the OTel overlay image
+# to ghcr.io/yackey-labs/actions-runner-otel.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-otel-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract runner version and compute tag
+        id: version
+        run: |
+          runner=$(grep -oP '(?<=actions-runner:)\S+' images/Dockerfile.otel | head -1)
+          sha="${GITHUB_SHA:0:7}"
+          echo "runner_version=${runner}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${runner}-otel.${sha}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${runner}-otel.latest" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: images/Dockerfile.otel
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/yackey-labs/actions-runner-otel:${{ steps.version.outputs.sha_tag }}
+            ghcr.io/yackey-labs/actions-runner-otel:${{ steps.version.outputs.latest_tag }}
