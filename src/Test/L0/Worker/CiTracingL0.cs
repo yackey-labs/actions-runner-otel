@@ -202,6 +202,28 @@ namespace GitHub.Runner.Common.Tests.Worker
         [Fact]
         [Trait("Level", "L0")]
         [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsParsedContext_WhenInputsIsCaseSensitiveDict()
+        {
+            // workflow_dispatch sends inputs as CaseSensitiveDictionaryContextData, not DictionaryContextData
+            const string traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+            var inputs = new CaseSensitiveDictionaryContextData();
+            inputs.Add("traceparent", new StringContextData(traceparent));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["inputs"] = inputs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+
+            Assert.NotEqual(default, result);
+            Assert.Equal(ActivityTraceId.CreateFromString("4bf92f3577b34da6a3ce929d0e0e4736"), result.TraceId);
+            Assert.Equal(ActivitySpanId.CreateFromString("00f067aa0ba902b7"), result.SpanId);
+            Assert.True(result.IsRemote);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
         public void TryExtractRemoteParent_PreservesTracestate_WhenPresent()
         {
             const string traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";

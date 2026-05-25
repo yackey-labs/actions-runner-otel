@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using GitHub.DistributedTask.Expressions2.Sdk;
 using GitHub.DistributedTask.Pipelines.ContextData;
 using GitHub.DistributedTask.WebApi;
 using GitHub.Runner.Sdk;
@@ -103,29 +104,33 @@ namespace GitHub.Runner.Worker
         ///
         /// The inputs live at the top-level <c>inputs</c> key of the job's context data —
         /// the same source that populates <c>${{ inputs.traceparent }}</c> in workflow YAML.
+        ///
+        /// Both <c>workflow_call</c> (uses <see cref="DictionaryContextData"/>) and
+        /// <c>workflow_dispatch</c> (uses <see cref="CaseSensitiveDictionaryContextData"/>)
+        /// are handled via <see cref="IReadOnlyObject"/>, the common interface of both types.
         /// </summary>
         public static ActivityContext TryExtractRemoteParent(IDictionary<string, PipelineContextData> contextData)
         {
             if (contextData == null ||
                 !contextData.TryGetValue("inputs", out var inputsRaw) ||
-                inputsRaw is not DictionaryContextData inputs)
+                inputsRaw is not IReadOnlyObject inputs)
             {
                 return default;
             }
 
-            if (!inputs.TryGetValue("traceparent", out var traceparentRaw))
+            if (!inputs.TryGetValue("traceparent", out var traceparentObj))
             {
                 return default;
             }
 
-            var traceparent = traceparentRaw?.ToString();
+            var traceparent = traceparentObj?.ToString();
             if (string.IsNullOrEmpty(traceparent))
             {
                 return default;
             }
 
-            inputs.TryGetValue("tracestate", out var tracestateRaw);
-            var tracestate = tracestateRaw?.ToString();
+            inputs.TryGetValue("tracestate", out var tracestateObj);
+            var tracestate = tracestateObj?.ToString();
 
             return ActivityContext.TryParse(traceparent, tracestate, isRemote: true, out var ctx)
                 ? ctx
