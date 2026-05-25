@@ -121,6 +121,15 @@ valid W3C traceparent, the job span is started with that as its remote parent
 malformed the runner falls back to a new root span, so the called workflow degrades
 gracefully when triggered manually or by other events.
 
+> **Implementation note:** `workflow_dispatch` and `workflow_call` serialize the
+> `inputs` context differently. `workflow_call` uses `DictionaryContextData`;
+> `workflow_dispatch` (REST API or `gh workflow run`) uses
+> `CaseSensitiveDictionaryContextData`. Both implement `IReadOnlyObject` from
+> `GitHub.DistributedTask.Expressions2.Sdk`, which is the interface the runner uses to
+> read the values. If you are porting this logic elsewhere, do not type-check against
+> `DictionaryContextData` directly — it will silently miss every `workflow_dispatch`
+> trigger.
+
 ## Configuration
 
 All configuration uses the standard OpenTelemetry environment variables read by the
