@@ -42,6 +42,8 @@ namespace GitHub.Runner.Worker
             ArgUtil.NotNull(jobContext, nameof(jobContext));
             ArgUtil.NotNull(jobContext.JobSteps, nameof(jobContext.JobSteps));
 
+            var _bgCoordinator = HostContext.GetService<IBackgroundStepCoordinator>();
+
             // TaskResult:
             //  Abandoned (Server set this.)
             //  Canceled
@@ -59,6 +61,15 @@ namespace GitHub.Runner.Worker
                 if (jobContext.JobSteps.Count == 0 && !checkPostJobActions)
                 {
                     checkPostJobActions = true;
+
+                    // Safety net: wait for any unwaited background steps before post-hooks
+                    var backgroundResult = await _bgCoordinator.WaitForUnwaitedStepsAsync(jobContext.CancellationToken);
+                    if (backgroundResult != TaskResult.Succeeded)
+                    {
+                        jobContext.Result = TaskResultUtil.MergeTaskResults(jobContext.Result, backgroundResult);
+                        jobContext.JobContext.Status = jobContext.Result?.ToActionResult();
+                    }
+
                     while (jobContext.PostJobSteps.TryPop(out var postStep))
                     {
                         jobContext.JobSteps.Enqueue(postStep);
@@ -74,8 +85,11 @@ namespace GitHub.Runner.Worker
                 ArgUtil.NotNull(step.ExecutionContext.Global, nameof(step.ExecutionContext.Global));
                 ArgUtil.NotNull(step.ExecutionContext.Global.Variables, nameof(step.ExecutionContext.Global.Variables));
 
-                // Start
-                step.ExecutionContext.Start();
+                // Start — defer for background steps until the slot is acquired
+                if (!step.ExecutionContext.IsBackground)
+                {
+                    step.ExecutionContext.Start();
+                }
 
                 // Optional child span for this step. Null (a no-op) unless OTel tracing is
                 // configured. Scoped to the loop body, so it is disposed (and the span ended)
@@ -246,14 +260,22 @@ namespace GitHub.Runner.Worker
                         }
                         else
                         {
-                            // Pause for DAP debugger before step execution
-                            await dapDebugger?.OnStepStartingAsync(step);
+                            if (step.ExecutionContext.IsBackground)
+                            {
+                                // Queue the background step via coordinator
+                                _bgCoordinator.StartBackgroundStep(step, jobContext.CancellationToken);
+                            }
+                            else
+                            {
+                                // Pause for DAP debugger before step execution
+                                await dapDebugger?.OnStepStartingAsync(step);
 
-                            // Run the step
-                            await RunStepAsync(step, jobContext.CancellationToken);
-                            CompleteStep(step);
+                                // Run the step synchronously (normal behavior)
+                                await RunStepAsync(step, jobContext.CancellationToken);
+                                CompleteStep(step);
 
-                            dapDebugger?.OnStepCompleted(step);
+                                dapDebugger?.OnStepCompleted(step);
+                            }
                         }
                     }
                     finally
