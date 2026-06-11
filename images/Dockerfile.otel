@@ -29,7 +29,7 @@ RUN RUNNER_RID=linux-x64 \
     && ./dev.sh layout Release "$RUNNER_RID"
 
 # ---- runtime stage: upstream image with our binaries overlaid -------------------
-FROM ghcr.io/actions/actions-runner:2.334.0
+FROM ghcr.io/actions/actions-runner:2.335.0
 
 # Replace only the .NET runner binaries; run.sh, externals, hooks, docker CLI and
 # git all come from the upstream image and remain version-matched to 2.334.0.
