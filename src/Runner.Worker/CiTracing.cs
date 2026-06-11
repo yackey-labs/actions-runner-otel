@@ -93,17 +93,25 @@ namespace GitHub.Runner.Worker
         }
 
         /// <summary>
-        /// Extracts a remote <see cref="ActivityContext"/> from <paramref name="contextData"/> when
-        /// the job was dispatched with a W3C <c>traceparent</c> input. Returns
-        /// <see langword="default"/> if no valid trace context is present.
+        /// Extracts a remote <see cref="ActivityContext"/> for the job span from
+        /// <paramref name="contextData"/>. Returns <see langword="default"/> if no valid
+        /// trace context is present. Two sources are consulted, in order:
         ///
-        /// Callers pass a <c>traceparent</c> (and optionally <c>tracestate</c>) via
-        /// <c>workflow_dispatch</c> or <c>workflow_call</c> inputs so that the downstream job
-        /// span becomes a child of the upstream step span, stitching cross-workflow runs into
-        /// a single trace.
-        ///
-        /// The inputs live at the top-level <c>inputs</c> key of the job's context data —
-        /// the same source that populates <c>${{ inputs.traceparent }}</c> in workflow YAML.
+        /// <list type="number">
+        /// <item><description>
+        /// <c>inputs.traceparent</c> (+ optional <c>inputs.tracestate</c>) — set via
+        /// <c>workflow_dispatch</c> or <c>workflow_call</c> inputs, stitching
+        /// cross-workflow runs into a single trace. Takes precedence.
+        /// </description></item>
+        /// <item><description>
+        /// <c>needs.&lt;job&gt;.outputs.traceparent</c> — a dependency job in the SAME run
+        /// that exported its step <c>TRACEPARENT</c> as a job output
+        /// (<c>echo "traceparent=$TRACEPARENT" &gt;&gt; "$GITHUB_OUTPUT"</c> + an
+        /// <c>outputs:</c> mapping). This chains a run's jobs (build → deploy) into one
+        /// trace. Jobs are visited in ordinal-sorted name order and the first valid
+        /// traceparent wins, so multi-dependency jobs resolve deterministically.
+        /// </description></item>
+        /// </list>
         ///
         /// Both <c>workflow_call</c> (uses <see cref="DictionaryContextData"/>) and
         /// <c>workflow_dispatch</c> (uses <see cref="CaseSensitiveDictionaryContextData"/>)
@@ -111,26 +119,75 @@ namespace GitHub.Runner.Worker
         /// </summary>
         public static ActivityContext TryExtractRemoteParent(IDictionary<string, PipelineContextData> contextData)
         {
-            if (contextData == null ||
-                !contextData.TryGetValue("inputs", out var inputsRaw) ||
-                inputsRaw is not IReadOnlyObject inputs)
+            if (contextData == null)
             {
                 return default;
             }
 
-            if (!inputs.TryGetValue("traceparent", out var traceparentObj))
+            var fromInputs = FromDispatchInputs(contextData);
+            if (fromInputs != default)
             {
-                return default;
+                return fromInputs;
             }
 
-            var traceparent = traceparentObj?.ToString();
-            if (string.IsNullOrEmpty(traceparent))
+            return FromNeedsOutputs(contextData);
+        }
+
+        // inputs.traceparent / inputs.tracestate (workflow_dispatch & workflow_call).
+        private static ActivityContext FromDispatchInputs(IDictionary<string, PipelineContextData> contextData)
+        {
+            if (!contextData.TryGetValue("inputs", out var inputsRaw) ||
+                inputsRaw is not IReadOnlyObject inputs ||
+                !inputs.TryGetValue("traceparent", out var traceparentObj))
             {
                 return default;
             }
 
             inputs.TryGetValue("tracestate", out var tracestateObj);
-            var tracestate = tracestateObj?.ToString();
+            return ParseContext(traceparentObj?.ToString(), tracestateObj?.ToString());
+        }
+
+        // needs.<job>.outputs.traceparent — dependency jobs of the same run that exported
+        // their step trace context as a job output.
+        private static ActivityContext FromNeedsOutputs(IDictionary<string, PipelineContextData> contextData)
+        {
+            if (!contextData.TryGetValue("needs", out var needsRaw) ||
+                needsRaw is not IReadOnlyObject needs)
+            {
+                return default;
+            }
+
+            var jobNames = new List<string>(needs.Keys);
+            jobNames.Sort(StringComparer.Ordinal);
+
+            foreach (var jobName in jobNames)
+            {
+                if (!needs.TryGetValue(jobName, out var jobObj) ||
+                    jobObj is not IReadOnlyObject job ||
+                    !job.TryGetValue("outputs", out var outputsObj) ||
+                    outputsObj is not IReadOnlyObject outputs ||
+                    !outputs.TryGetValue("traceparent", out var traceparentObj))
+                {
+                    continue;
+                }
+
+                outputs.TryGetValue("tracestate", out var tracestateObj);
+                var ctx = ParseContext(traceparentObj?.ToString(), tracestateObj?.ToString());
+                if (ctx != default)
+                {
+                    return ctx;
+                }
+            }
+
+            return default;
+        }
+
+        private static ActivityContext ParseContext(string traceparent, string tracestate)
+        {
+            if (string.IsNullOrEmpty(traceparent))
+            {
+                return default;
+            }
 
             return ActivityContext.TryParse(traceparent, tracestate, isRemote: true, out var ctx)
                 ? ctx

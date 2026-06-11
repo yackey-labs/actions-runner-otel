@@ -260,5 +260,101 @@ namespace GitHub.Runner.Common.Tests.Worker
                 Activity.Dispose();
             }
         }
+
+        // --- needs.<job>.outputs.traceparent (same-run job chaining) ---
+
+        private static DictionaryContextData NeedsJob(string traceparent)
+        {
+            var outputs = new DictionaryContextData();
+            if (traceparent != null)
+            {
+                outputs.Add("traceparent", new StringContextData(traceparent));
+            }
+            var job = new DictionaryContextData();
+            job.Add("outputs", outputs);
+            job.Add("result", new StringContextData("success"));
+            return job;
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsParsedContext_FromNeedsOutputs()
+        {
+            const string traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+            var needs = new DictionaryContextData();
+            needs.Add("docker", NeedsJob(traceparent));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["needs"] = needs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+
+            Assert.NotEqual(default, result);
+            Assert.Equal(ActivityTraceId.CreateFromString("4bf92f3577b34da6a3ce929d0e0e4736"), result.TraceId);
+            Assert.Equal(ActivitySpanId.CreateFromString("00f067aa0ba902b7"), result.SpanId);
+            Assert.True(result.IsRemote);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_InputsTakePrecedence_OverNeeds()
+        {
+            const string fromInputs = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-aaaaaaaaaaaaaaaa-01";
+            const string fromNeeds = "00-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-bbbbbbbbbbbbbbbb-01";
+
+            var inputs = new DictionaryContextData();
+            inputs.Add("traceparent", new StringContextData(fromInputs));
+            var needs = new DictionaryContextData();
+            needs.Add("docker", NeedsJob(fromNeeds));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["inputs"] = inputs,
+                ["needs"] = needs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+
+            Assert.Equal(ActivityTraceId.CreateFromString("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), result.TraceId);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_NeedsJobsVisitedInSortedOrder_FirstValidWins()
+        {
+            // "alpha" sorts before "beta": alpha has no traceparent, beta's is used.
+            // A third job with an invalid value sorts first and must be skipped.
+            const string valid = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+            var needs = new DictionaryContextData();
+            needs.Add("beta", NeedsJob(valid));
+            needs.Add("alpha", NeedsJob(null));
+            needs.Add("aaa-invalid", NeedsJob("not-a-valid-traceparent"));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["needs"] = needs,
+            };
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+
+            Assert.Equal(ActivityTraceId.CreateFromString("4bf92f3577b34da6a3ce929d0e0e4736"), result.TraceId);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsDefault_WhenNeedsHaveNoTraceparent()
+        {
+            var needs = new DictionaryContextData();
+            needs.Add("web", NeedsJob(null));
+            var contextData = new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["needs"] = needs,
+            };
+
+            Assert.Equal(default, CiTracing.TryExtractRemoteParent(contextData));
+        }
     }
 }

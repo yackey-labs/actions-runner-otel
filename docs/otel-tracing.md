@@ -112,6 +112,41 @@ Both workflow runs share the same `traceId`, so a single trace view in Honeycomb
 any other backend shows the full build → deploy pipeline without any manual span
 construction.
 
+## Same-run job chaining (`needs.<job>.outputs.traceparent`)
+
+Jobs inside ONE workflow run are separate runner processes, so by default each job
+span is its own trace root. To chain them (web → docker → deploy as one trace), a
+dependency job exports its step trace context as a job output, and the downstream
+job's span is parented on it automatically:
+
+```yaml
+jobs:
+  docker:
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      traceparent: ${{ steps.tp.outputs.traceparent }}
+    steps:
+      # ... build steps ...
+      - name: Export trace context
+        id: tp
+        run: echo "traceparent=$TRACEPARENT" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: [docker]   # ← deploy's job span is parented on docker's exported step
+    steps: ...
+```
+
+Resolution order for the job span's remote parent:
+
+1. `inputs.traceparent` (workflow_dispatch / workflow_call) — cross-workflow wins;
+2. `needs.<job>.outputs.traceparent` — dependency jobs visited in ordinal-sorted
+   name order, first valid traceparent wins (deterministic for multi-`needs` jobs);
+3. otherwise the job span is a new trace root.
+
+An exported `tracestate` output (`needs.<job>.outputs.tracestate`) is honored too.
+Combine both mechanisms and an app's web → docker → deploy chain plus the
+cross-repo deploy workflow it dispatches all share one `traceId`.
+
 ### How it works
 
 Before starting the job span the runner reads `message.ContextData["inputs"]` — the
