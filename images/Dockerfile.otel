@@ -7,7 +7,7 @@
 # fork's runnerversion so the inherited layout stays compatible with our binaries.
 #
 # Build from the repository root:
-#   docker build -f images/Dockerfile.otel -t ghcr.io/yackey-labs/actions-runner-otel:2.334.0 .
+#   docker build -f images/Dockerfile.otel -t ghcr.io/yackey-labs/actions-runner-otel:2.336.0 .
 
 # ---- build stage: compile the runner binaries from source -----------------------
 # dev.sh downloads its own pinned .NET SDK and emits ../_layout/bin, which includes
@@ -29,10 +29,10 @@ RUN RUNNER_RID=linux-x64 \
     && ./dev.sh layout Release "$RUNNER_RID"
 
 # ---- runtime stage: upstream image with our binaries overlaid -------------------
-FROM ghcr.io/actions/actions-runner:2.335.0
+FROM ghcr.io/actions/actions-runner:2.336.0
 
 # Replace only the .NET runner binaries; run.sh, externals, hooks, docker CLI and
-# git all come from the upstream image and remain version-matched to 2.334.0.
+# git all come from the upstream image and remain version-matched to 2.336.0.
 COPY --chown=runner:docker --from=build /src/_layout/bin /home/runner/bin
 
 USER root
