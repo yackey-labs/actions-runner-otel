@@ -11,7 +11,8 @@ on:
       - '**.md'
 
 permissions:
-  contents: read
+  # contents: write so the build can cut a GitHub release for each published image.
+  contents: write
   packages: write
 
 jobs:
@@ -54,6 +55,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -69,3 +71,52 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=GitHub Actions runner with OpenTelemetry job/step tracing
             io.yackey.runner.upstream-version=${{ steps.version.outputs.runner_version }}
+
+      # A release per published image. The image tag is already a monotonic, sortable
+      # version (<runner-version>-otel.<N>), so it doubles as the git tag -- the Releases
+      # tab then answers "what changed between .12 and .13" without reading git log, and
+      # an incident has something to link to.
+      #
+      # Notes are generated through the API rather than `gh release create
+      # --generate-notes`, because that flag cannot be combined with --notes and the
+      # image coordinates are the part worth having.
+      #
+      # PRERELEASE on purpose. CI builds and unit-tests but never boots the image against
+      # a real job: 2.336.0-otel.13 compiled clean, passed all seven build targets and
+      # the full suite, then crashed on every job start. Green does not yet mean runs.
+      # Dropping the prerelease flag by hand is the natural place to record "this one
+      # actually ran a job".
+      - name: Cut a release for this image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.version_tag }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          RUNNER_VERSION: ${{ steps.version.outputs.runner_version }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do."
+            exit 0
+          fi
+
+          GENERATED=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" --jq .body 2>/dev/null || echo "")
+
+          {
+            printf '**Image**\n\n```\n%s:%s\n%s@%s\n```\n\n' \
+              "$IMAGE" "$TAG" "$IMAGE" "$DIGEST"
+            printf 'Upstream runner `%s` — commit `%s`\n\n' "$RUNNER_VERSION" "$GITHUB_SHA"
+            printf '> Marked prerelease until this image has actually run a job. CI builds\n'
+            printf '> and unit-tests but does not boot the image, so green does not yet mean runs.\n\n'
+            printf -- '---\n\n%s\n' "$GENERATED"
+          } > /tmp/release-notes.md
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --prerelease \
+            --notes-file /tmp/release-notes.md
+
+          echo "Cut prerelease $TAG"
