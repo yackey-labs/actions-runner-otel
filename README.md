@@ -1,8 +1,9 @@
 > ## ⚠️ This is a fork
 >
 > **`yackey-labs/actions-runner-otel`** — a fork of [`actions/runner`](https://github.com/actions/runner)
-> that emits an OpenTelemetry trace per job: one root span for the job, one child
-> span per step, following the OTel [CICD](https://opentelemetry.io/docs/specs/semconv/cicd/)
+> that emits an OpenTelemetry trace per **workflow run**: every job in a run shares one
+> trace, with one span per job and one child span per step — following the OTel
+> [CICD](https://opentelemetry.io/docs/specs/semconv/cicd/)
 > and [VCS](https://opentelemetry.io/docs/specs/semconv/attributes-registry/vcs/)
 > semantic conventions.
 >
@@ -22,7 +23,7 @@
 >   spec:
 >     containers:
 >       - name: runner
->         image: ghcr.io/yackey-labs/actions-runner-otel:<runner-version>-otel.<sha>
+>         image: ghcr.io/yackey-labs/actions-runner-otel:<runner-version>-otel.<N>
 >         command: ["/home/runner/run.sh"]
 >         env:
 >           - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -42,6 +43,33 @@
 > CLI) exports to the same collector and **parents itself to the step that ran
 > it** — via the per-step `TRACEPARENT` the runner injects. Uninstrumented tools
 > are unaffected.
+>
+> ### Authenticated collectors
+>
+> Auth needs no extra configuration here — the OpenTelemetry SDK reads the standard
+> variables, so exporting straight to a vendor is just:
+>
+> ```yaml
+>           - name: OTEL_EXPORTER_OTLP_ENDPOINT
+>             value: "https://api.honeycomb.io"
+>           - name: OTEL_EXPORTER_OTLP_PROTOCOL
+>             value: "http/protobuf"
+>           - name: OTEL_EXPORTER_OTLP_HEADERS
+>             valueFrom:
+>               secretKeyRef: { name: honeycomb-api-key, key: otlp-headers }
+> ```
+>
+> **The runner removes `OTEL_EXPORTER_OTLP_HEADERS` from its environment once the
+> exporter has read it.** Steps inherit the runner's environment, so leaving it in
+> place would hand the credential to every line of workflow code — on a machine that
+> runs other people's jobs. Steps keep `OTEL_EXPORTER_OTLP_ENDPOINT`,
+> `OTEL_EXPORTER_OTLP_PROTOCOL` and `TRACEPARENT`, so instrumented tools still export
+> and still nest under their step; they just cannot authenticate as the runner. Set
+> `RUNNER_OTEL_EXPOSE_HEADERS_TO_STEPS=true` if you want them to.
+>
+> Prefer pointing the runner at a collector you control and letting **it** hold the
+> vendor credential. Then no secret is anywhere near the runner, and you get batching,
+> retry and redaction for free.
 >
 > ### Images
 >

@@ -45,6 +45,21 @@ namespace GitHub.Runner.Worker
         private const string OtlpEndpointVariable = "OTEL_EXPORTER_OTLP_ENDPOINT";
 
         /// <summary>
+        /// Standard OTLP header variable, used for collector auth (for example
+        /// <c>x-honeycomb-team=&lt;key&gt;</c> when exporting straight to a vendor). Read by
+        /// the OpenTelemetry SDK; named here only so it can be removed from the environment
+        /// once the exporter has consumed it — see <see cref="TryCreateTracerProvider"/>.
+        /// </summary>
+        private const string OtlpHeadersVariable = "OTEL_EXPORTER_OTLP_HEADERS";
+
+        /// <summary>
+        /// Set to <c>true</c>/<c>1</c> to leave <see cref="OtlpHeadersVariable"/> in the
+        /// environment that steps inherit. Off by default: see the security note on
+        /// <see cref="TryCreateTracerProvider"/>.
+        /// </summary>
+        private const string ExposeHeadersVariable = "RUNNER_OTEL_EXPOSE_HEADERS_TO_STEPS";
+
+        /// <summary>
         /// W3C Trace Context environment variable. Each step span's <see cref="Activity.Id"/> is
         /// published here for that step, so tools the step invokes nest under the step span.
         /// </summary>
@@ -66,11 +81,33 @@ namespace GitHub.Runner.Worker
 
             // Fully qualified: GitHub.Runner.Sdk (namespace) and OpenTelemetry.Sdk (class) are
             // both in scope, so the bare name "Sdk" would be ambiguous.
-            return OpenTelemetry.Sdk.CreateTracerProviderBuilder()
+            var provider = OpenTelemetry.Sdk.CreateTracerProviderBuilder()
                 .ConfigureResource(resource => resource.AddService(SourceName, serviceVersion: BuildConstants.RunnerPackage.Version))
                 .AddSource(SourceName)
                 .AddOtlpExporter()
                 .Build();
+
+            // OTEL_EXPORTER_OTLP_HEADERS is how an authenticated collector is configured, so
+            // it routinely holds a credential (x-honeycomb-team=<key>, Authorization=...).
+            // Steps inherit this process's environment -- that inheritance is deliberate and
+            // is what lets an instrumented tool inside a step export to the same collector --
+            // but it would also hand that credential to every line of workflow code the
+            // runner executes, on a machine that runs other people's jobs.
+            //
+            // The exporter has already read the value by this point (AddOtlpExporter binds
+            // its options during Build), so removing it here costs the runner nothing and
+            // closes the exposure. Steps keep OTEL_EXPORTER_OTLP_ENDPOINT/PROTOCOL and
+            // TRACEPARENT, so tools still export and still nest under their step -- they
+            // simply cannot borrow the runner's credentials.
+            //
+            // Escape hatch for anyone who genuinely wants in-step tools authenticating as the
+            // runner. Off by default because the safe direction is the one you have to ask for.
+            if (!IsTruthy(Environment.GetEnvironmentVariable(ExposeHeadersVariable)))
+            {
+                Environment.SetEnvironmentVariable(OtlpHeadersVariable, null);
+            }
+
+            return provider;
         }
 
         /// <summary>
@@ -196,6 +233,9 @@ namespace GitHub.Runner.Worker
 
             return default;
         }
+
+        private static bool IsTruthy(string value)
+            => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) || value == "1";
 
         /// <summary>
         /// Derives a deterministic trace context for the workflow RUN from

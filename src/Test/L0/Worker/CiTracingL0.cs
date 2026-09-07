@@ -473,5 +473,74 @@ namespace GitHub.Runner.Common.Tests.Worker
             Assert.Equal("0af7651916cd43dd8448eb211c80319c", result.TraceId.ToHexString());
             Assert.Equal("b7ad6b7169203331", result.SpanId.ToHexString());
         }
+
+        // ── OTLP auth headers ───────────────────────────────────────────────────
+
+        private static void WithOtlpEnv(string headers, string expose, Action body)
+        {
+            var e0 = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
+            var h0 = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS");
+            var x0 = Environment.GetEnvironmentVariable("RUNNER_OTEL_EXPOSE_HEADERS_TO_STEPS");
+            try
+            {
+                Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
+                Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", headers);
+                Environment.SetEnvironmentVariable("RUNNER_OTEL_EXPOSE_HEADERS_TO_STEPS", expose);
+                body();
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT", e0);
+                Environment.SetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS", h0);
+                Environment.SetEnvironmentVariable("RUNNER_OTEL_EXPOSE_HEADERS_TO_STEPS", x0);
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryCreateTracerProvider_RemovesOtlpHeadersFromEnvironment_ByDefault()
+        {
+            // The credential must not reach the environment that steps inherit.
+            WithOtlpEnv("x-honeycomb-team=secret-key", null, () =>
+            {
+                using var provider = CiTracing.TryCreateTracerProvider();
+
+                Assert.NotNull(provider);
+                Assert.Null(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"));
+            });
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryCreateTracerProvider_KeepsOtlpHeaders_WhenExposureExplicitlyRequested()
+        {
+            foreach (var optIn in new[] { "true", "TRUE", "1" })
+            {
+                WithOtlpEnv("x-honeycomb-team=secret-key", optIn, () =>
+                {
+                    using var provider = CiTracing.TryCreateTracerProvider();
+
+                    Assert.NotNull(provider);
+                    Assert.Equal("x-honeycomb-team=secret-key", Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_HEADERS"));
+                });
+            }
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryCreateTracerProvider_LeavesEndpointAndProtocolForSteps()
+        {
+            // Steps must still be able to export and nest -- only the credential is withheld.
+            WithOtlpEnv("x-honeycomb-team=secret-key", null, () =>
+            {
+                using var provider = CiTracing.TryCreateTracerProvider();
+
+                Assert.NotNull(provider);
+                Assert.Equal("http://localhost:4318", Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
+            });
+        }
     }
 }
