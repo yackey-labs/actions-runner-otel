@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using GitHub.DistributedTask.Expressions2.Sdk;
 using GitHub.DistributedTask.Pipelines.ContextData;
 using GitHub.DistributedTask.WebApi;
@@ -111,6 +113,13 @@ namespace GitHub.Runner.Worker
         /// trace. Jobs are visited in ordinal-sorted name order and the first valid
         /// traceparent wins, so multi-dependency jobs resolve deterministically.
         /// </description></item>
+        /// <item><description>
+        /// A context DERIVED from the workflow run identity — see
+        /// <see cref="FromWorkflowRun"/>. This is the default, and it replaces the previous
+        /// behaviour of every job starting its own trace. It requires no workflow changes
+        /// and no coordination between jobs: parallel jobs with no <c>needs</c> edge still
+        /// land in one trace per workflow run.
+        /// </description></item>
         /// </list>
         ///
         /// Both <c>workflow_call</c> (uses <see cref="DictionaryContextData"/>) and
@@ -130,7 +139,13 @@ namespace GitHub.Runner.Worker
                 return fromInputs;
             }
 
-            return FromNeedsOutputs(contextData);
+            var fromNeeds = FromNeedsOutputs(contextData);
+            if (fromNeeds != default)
+            {
+                return fromNeeds;
+            }
+
+            return FromWorkflowRun(contextData);
         }
 
         // inputs.traceparent / inputs.tracestate (workflow_dispatch & workflow_call).
@@ -180,6 +195,87 @@ namespace GitHub.Runner.Worker
             }
 
             return default;
+        }
+
+        /// <summary>
+        /// Derives a deterministic trace context for the workflow RUN from
+        /// <c>github.repository</c>, <c>github.run_id</c> and <c>github.run_attempt</c>.
+        ///
+        /// A runner process handles exactly one job. It cannot see the workflow's start
+        /// time, its sibling jobs, or its conclusion, so no runner can emit a span for the
+        /// workflow itself. What every runner in a run CAN do is independently compute the
+        /// same identifiers from values all of them already have — no coordination, no
+        /// workflow changes, and it works for parallel jobs that have no <c>needs</c> edge
+        /// to inherit from.
+        ///
+        /// The job spans therefore share one trace and hang off a common workflow span id.
+        /// That span is never emitted, so the trace has no root. This is deliberate: the
+        /// grouping is the valuable part, and emitting a real root would require a
+        /// <c>workflow_run</c>-triggered reporter added to every consuming repository —
+        /// which would cost exactly the per-repository wiring this runner exists to avoid.
+        /// Workflow duration remains derivable from the job spans (earliest start to latest
+        /// end).
+        ///
+        /// SHA-256 is used as a distribution function, not for security: the inputs are all
+        /// public. Trace and span ids are drawn from DIFFERENT hashes so the span id is not
+        /// a prefix of the trace id.
+        ///
+        /// Note on re-runs: <c>run_attempt</c> is part of the input, so re-running a whole
+        /// workflow produces a new, separate trace. Re-running a SINGLE failed job does not
+        /// increment <c>run_attempt</c>, so that job rejoins the original run's trace —
+        /// which is the intended reading of "this job belongs to that workflow run".
+        /// </summary>
+        private static ActivityContext FromWorkflowRun(IDictionary<string, PipelineContextData> contextData)
+        {
+            if (!contextData.TryGetValue("github", out var githubRaw) ||
+                githubRaw is not IReadOnlyObject github)
+            {
+                return default;
+            }
+
+            var repository = TryGetString(github, "repository");
+            var runId = TryGetString(github, "run_id");
+            if (string.IsNullOrEmpty(repository) || string.IsNullOrEmpty(runId))
+            {
+                return default;
+            }
+
+            // run_attempt is absent on older server versions; treat that as attempt 1 rather
+            // than refusing to group the run.
+            var runAttempt = TryGetString(github, "run_attempt");
+            if (string.IsNullOrEmpty(runAttempt))
+            {
+                runAttempt = "1";
+            }
+
+            var seed = $"{repository}/{runId}/{runAttempt}";
+            var traceId = ActivityTraceId.CreateFromBytes(Digest(seed, 16));
+            var spanId = ActivitySpanId.CreateFromBytes(Digest($"{seed}/workflow", 8));
+
+            return new ActivityContext(traceId, spanId, ActivityTraceFlags.Recorded, isRemote: true);
+        }
+
+        private static string TryGetString(IReadOnlyObject obj, string key)
+            => obj.TryGetValue(key, out var value) ? value?.ToString() : null;
+
+        // First <paramref name="length"/> bytes of SHA-256(input). An all-zero id is invalid
+        // per the W3C spec; SHA-256 makes that outcome not worth guarding against, but the
+        // check is cheap and turns an impossible-in-practice case into a fall-through rather
+        // than an ArgumentException at job start.
+        private static byte[] Digest(string input, int length)
+        {
+            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(input));
+            var bytes = new byte[length];
+            Array.Copy(hash, bytes, length);
+
+            var allZero = true;
+            foreach (var b in bytes)
+            {
+                if (b != 0) { allZero = false; break; }
+            }
+            if (allZero) { bytes[length - 1] = 1; }
+
+            return bytes;
         }
 
         private static ActivityContext ParseContext(string traceparent, string tracestate)
