@@ -1,3 +1,80 @@
+> ## ⚠️ This is a fork
+>
+> **`yackey-labs/actions-runner-otel`** — a fork of [`actions/runner`](https://github.com/actions/runner)
+> that emits an OpenTelemetry trace per job: one root span for the job, one child
+> span per step, following the OTel [CICD](https://opentelemetry.io/docs/specs/semconv/cicd/)
+> and [VCS](https://opentelemetry.io/docs/specs/semconv/attributes-registry/vcs/)
+> semantic conventions.
+>
+> Tracing is **opt-in and zero-cost when off** — configured entirely through
+> standard `OTEL_*` environment variables. With no OTLP endpoint set, the runner
+> behaves exactly as upstream. **No workflow changes are ever required.**
+>
+> Full design and attribute reference: **[`docs/otel-tracing.md`](docs/otel-tracing.md)**
+>
+> ### Using it with Actions Runner Controller (ARC)
+>
+> Point the runner container at this image and give it an OTLP endpoint. That is
+> the whole integration — nothing in your workflows changes:
+>
+> ```yaml
+> template:
+>   spec:
+>     containers:
+>       - name: runner
+>         image: ghcr.io/yackey-labs/actions-runner-otel:<runner-version>-otel.<sha>
+>         command: ["/home/runner/run.sh"]
+>         env:
+>           - name: OTEL_EXPORTER_OTLP_ENDPOINT
+>             value: "http://<your-otlp-collector>:4318"
+>           - name: OTEL_EXPORTER_OTLP_PROTOCOL
+>             value: "http/protobuf"
+>           - name: OTEL_SERVICE_NAME
+>             value: "github.actions.runner"
+>           # Optional but recommended: attribute spans to the pod and node that
+>           # ran them, so a slow job can be traced to a specific worker.
+>           - name: OTEL_RESOURCE_ATTRIBUTES
+>             value: "k8s.pod.name=$(POD_NAME),k8s.node.name=$(NODE_NAME),cicd.worker.id=$(POD_NAME)"
+> ```
+>
+> Because each step's subprocess inherits the runner's environment, any
+> OTel-instrumented tool a step invokes (test runner, `docker build`, a custom
+> CLI) exports to the same collector and **parents itself to the step that ran
+> it** — via the per-step `TRACEPARENT` the runner injects. Uninstrumented tools
+> are unaffected.
+>
+> ### Images
+>
+> `.github/workflows/build-otel-image.yml` publishes to
+> `ghcr.io/yackey-labs/actions-runner-otel` on every push to `main`:
+>
+> | tag | meaning |
+> |-----|---------|
+> | `<runner-version>-otel.<N>` | immutable, SemVer-sortable — pin this |
+> | `<runner-version>-otel.latest` | moving pointer to the newest build |
+>
+> `N` is the build number. The tag is valid SemVer (`otel.N` is a numeric
+> pre-release identifier), so `9` sorts before `10` and dependency tooling can
+> tell newer from older. The commit sha lives in the
+> `org.opencontainers.image.revision` label rather than the tag, because a sha
+> is alphanumeric and would make the tag unorderable.
+>
+> Pin the numbered tag. How you roll a new one out is deliberately not this
+> repo's concern — the build publishes, and nothing here knows or cares what
+> consumes it.
+>
+> ### Keeping the fork current
+>
+> Sync from upstream and rebase the OTel overlay on top; do not cherry-pick
+> individual upstream changes. Upstream's scheduled dependency bots
+> (`node-upgrade`, `docker-buildx-upgrade`, `dotnet-upgrade`, `npm-audit`) are
+> **disabled here on purpose** — they propose changes to upstream-owned files
+> that arrive with the next sync anyway, and merging them would put the fork
+> ahead of upstream and manufacture conflicts. They are disabled via the Actions
+> API rather than deleted, so there is no diff against upstream.
+
+---
+
 <p align="center">
   <img src="docs/res/github-graph.png">
 </p>
