@@ -18,6 +18,12 @@ permissions:
 jobs:
   build-otel-image:
     runs-on: ubuntu-latest
+    # GitHub's default job timeout is 6 HOURS. A multi-arch buildx build here takes
+    # ~8-10 minutes, so anything approaching 30 is wedged, not slow -- and the smoke
+    # test below starts a runner process that is designed not to exit on its own.
+    # Without this, one hung step burns a runner for a quarter of a day before anyone
+    # notices.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
@@ -92,6 +98,10 @@ jobs:
       # worker then exits non-zero on missing arguments, which is expected and ignored:
       # the assertion is on assembly-load failures in the output, not the exit code.
       - name: Smoke-test the built image
+        # Tighter than the job bound: this step should take seconds. The inner
+        # `timeout 45` handles the expected non-exiting worker; this is the backstop for
+        # anything else (a stuck image pull, a hung docker daemon).
+        timeout-minutes: 5
         env:
           IMAGE: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version_tag }}
         run: |
