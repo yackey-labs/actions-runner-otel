@@ -1,7 +1,7 @@
 # OpenTelemetry tracing
 
-This runner can emit an OpenTelemetry trace per **workflow run**: every job in a run
-shares one trace, with one span per job and one child span per step. Tracing is **opt-in** and configured entirely through the
+This runner can emit an OpenTelemetry trace per job: one root span for the job and one
+child span per step, with a **link** to the workflow run the job belongs to. Tracing is **opt-in** and configured entirely through the
 standard `OTEL_*` environment variables — when no OTLP endpoint is set, the runner
 behaves exactly as upstream and pays no measurable cost.
 
@@ -34,36 +34,60 @@ and the runner overlays this per-step `TRACEPARENT` on top. Any tool that is its
 OpenTelemetry-instrumented therefore exports to the same collector and parents to its step
 automatically. Tools that are not instrumented are unaffected.
 
-## How jobs in a run are grouped
+## How a run's jobs are related
 
-A runner process handles exactly one job. It cannot see the workflow's start time,
-its sibling jobs, or its conclusion — so no runner can emit a span for the workflow
-itself. What every runner in a run *can* do is independently derive the same trace id
-and the same workflow span id from values they all already have:
+One trace per job, linked — not one trace per workflow run. CI is not request/response
+work, and this is the shape Honeycomb recommends for it:
 
-    SHA-256("<repository>/<run_id>/<run_attempt>")     -> trace id  (first 16 bytes)
-    SHA-256("<repository>/<run_id>/<run_attempt>/workflow") -> workflow span id (first 8 bytes)
+> "Since Honeycomb only charges by events (spans) and doesn't care how many trace
+> identifiers there are, it's perfectly reasonable to create a new trace per job."
+> — [Exotic Trace Shapes](https://www.honeycomb.io/blog/exotic-trace-shapes)
 
-No coordination, no workflow changes, and it works for parallel jobs that have no
-`needs` edge to inherit from. SHA-256 is used here as a distribution function, not for
-security — every input is public.
+Each job span carries an OpenTelemetry **link** to its workflow run, with a target
+derived identically by every job in the run and needing no coordination:
 
-The workflow span itself is **never emitted**, so these traces have no root. That is
-deliberate. The grouping is the valuable part, and emitting a real root would require a
-`workflow_run`-triggered reporter added to every consuming repository — precisely the
-per-repository wiring this runner exists to avoid. Workflow duration stays derivable
-from the job spans: earliest start to latest end.
+    SHA-256("<repository>/<run_id>/<run_attempt>")           -> trace id  (first 16 bytes)
+    SHA-256("<repository>/<run_id>/<run_attempt>/workflow")  -> span id   (first 8 bytes)
 
-Parent resolution runs in this order, first match wins:
+SHA-256 is a distribution function here, not a security control — every input is public.
 
-1. `inputs.traceparent` — an explicit cross-workflow chain (see below)
-2. `needs.<job>.outputs.traceparent` — an explicit dependency chain within the run
-3. the derived workflow-run context above — the default
+**Why a link rather than a shared parent.** A runner process handles exactly one job and
+never learns the run's start time, its sibling jobs, or its conclusion, so no runner can
+emit a span for the workflow itself. Parenting jobs to a derived workflow span therefore
+leaves every trace with a MISSING ROOT, and Honeycomb documents that as the most damaging
+kind of missing span: queries filtering on `is_root` do not count the trace at all. A link
+keeps the relationship navigable while every job span stays a real, queryable root.
 
-**Re-runs.** `run_attempt` is part of the seed, so re-running a whole workflow produces
-a new, separate trace. Re-running a *single failed job* does not increment
-`run_attempt`, so that job rejoins the original run's trace — the intended reading of
-"this job belongs to that workflow run".
+It also is not needed for grouping. The job span already carries
+`cicd.pipeline.run.id`, so "every job in this run" is one `GROUP BY` away.
+
+**Does `needs:` put jobs in one trace?** Only if you ask for it. A `needs:` edge alone
+changes nothing — the downstream job is still its own trace, linked to the run. The two
+merge into a single trace only when the upstream job explicitly exports its step trace
+context as a job output:
+
+```yaml
+jobs:
+  build:
+    outputs:
+      traceparent: ${{ steps.tp.outputs.traceparent }}
+    steps:
+      - id: tp
+        run: echo "traceparent=$TRACEPARENT" >> "$GITHUB_OUTPUT"
+  deploy:
+    needs: build
+    steps: [...]           # deploy's job span is now a child of build's step span
+```
+
+That case is safe precisely because the parent it attaches to is a span that **is**
+emitted — the upstream job's step span, itself under a real root. It is the opposite of
+parenting to a derived workflow span that nothing ever emits. So the rule is: attach to a
+span that exists, link to one that does not.
+
+**Re-runs.** `run_attempt` is part of the seed, so re-running a whole workflow links to a
+different run. Re-running a *single failed job* does not increment `run_attempt`, so that
+job links back to the original run — the intended reading of "this job belongs to that
+workflow run".
 
 ## Cross-workflow trace propagation
 
