@@ -72,6 +72,45 @@ jobs:
             org.opencontainers.image.description=GitHub Actions runner with OpenTelemetry job/step tracing
             io.yackey.runner.upstream-version=${{ steps.version.outputs.runner_version }}
 
+      # Boot the image we just built. This is the gate the pipeline was missing.
+      #
+      # 2.336.0-otel.13 compiled, passed all seven build targets and the full test suite,
+      # and then crashed on every job start:
+      #
+      #     System.IO.FileNotFoundException: Could not load file or assembly
+      #     'System.Diagnostics.DiagnosticSource, Version=10.0.0.0'
+      #        at GitHub.Runner.Worker.CiTracing.TryCreateTracerProvider()
+      #
+      # There is already a unit test that builds a real TracerProvider, and it passed --
+      # because under `dotnet test` NuGet has placed DiagnosticSource 10.x in the output
+      # directory, while the `dev.sh layout` that ships in the image has not. The test's
+      # assembly closure is not the shipped layout's. Only starting the actual binary from
+      # the actual image catches that class of regression.
+      #
+      # CiTracing.TryCreateTracerProvider() is the first statement in Runner.Worker's
+      # Main, before HostContext is constructed, so a bare invocation reaches it. The
+      # worker then exits non-zero on missing arguments, which is expected and ignored:
+      # the assertion is on assembly-load failures in the output, not the exit code.
+      - name: Smoke-test the built image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version_tag }}
+        run: |
+          set -uo pipefail
+          out=$(docker run --rm \
+                  --entrypoint /home/runner/bin/Runner.Worker \
+                  -e OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
+                  -e OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
+                  "$IMAGE" 2>&1 || true)
+          echo "--- Runner.Worker output ---"
+          echo "$out"
+          echo "----------------------------"
+
+          if echo "$out" | grep -qiE "Could not load file or assembly|FileNotFoundException|TypeLoadException|MissingMethodException|BadImageFormatException"; then
+            echo "::error::Runner.Worker could not start from the built image with tracing enabled -- assembly closure is broken. Not cutting a release."
+            exit 1
+          fi
+          echo "Runner.Worker started with tracing enabled; assembly closure is intact."
+
       # A release per published image. The image tag is already a monotonic, sortable
       # version (<runner-version>-otel.<N>), so it doubles as the git tag -- the Releases
       # tab then answers "what changed between .12 and .13" without reading git log, and
@@ -81,11 +120,10 @@ jobs:
       # --generate-notes`, because that flag cannot be combined with --notes and the
       # image coordinates are the part worth having.
       #
-      # PRERELEASE on purpose. CI builds and unit-tests but never boots the image against
-      # a real job: 2.336.0-otel.13 compiled clean, passed all seven build targets and
-      # the full suite, then crashed on every job start. Green does not yet mean runs.
-      # Dropping the prerelease flag by hand is the natural place to record "this one
-      # actually ran a job".
+      # Not a prerelease. The smoke test above is the gate: a release is only cut for an
+      # image whose runner has been started with tracing enabled. A prerelease flag that
+      # nothing ever promotes decays into noise, so the boot check earns the release
+      # instead of a label deferring the question.
       - name: Cut a release for this image
         env:
           GH_TOKEN: ${{ github.token }}
@@ -108,15 +146,14 @@ jobs:
             printf '**Image**\n\n```\n%s:%s\n%s@%s\n```\n\n' \
               "$IMAGE" "$TAG" "$IMAGE" "$DIGEST"
             printf 'Upstream runner `%s` — commit `%s`\n\n' "$RUNNER_VERSION" "$GITHUB_SHA"
-            printf '> Marked prerelease until this image has actually run a job. CI builds\n'
-            printf '> and unit-tests but does not boot the image, so green does not yet mean runs.\n\n'
+            printf '> Runner.Worker was started from this image with tracing enabled before\n'
+            printf '> the release was cut, so its OpenTelemetry assembly closure is known good.\n\n'
             printf -- '---\n\n%s\n' "$GENERATED"
           } > /tmp/release-notes.md
 
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "$TAG" \
-            --prerelease \
             --notes-file /tmp/release-notes.md
 
-          echo "Cut prerelease $TAG"
+          echo "Cut release $TAG"
