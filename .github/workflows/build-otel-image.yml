@@ -20,13 +20,27 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Extract runner version and compute tag
+      - name: Extract runner version and compute tags
         id: version
         run: |
           runner=$(grep -oP '(?<=actions-runner:)\S+' images/Dockerfile.otel | head -1)
-          sha="${GITHUB_SHA:0:7}"
+
+          # <runner-version>-otel.<N> is valid SemVer: the pre-release is
+          # "otel.N", and N is a NUMERIC identifier, so SemVer compares it
+          # NUMERICALLY (9 < 10) rather than lexically. Runner version is
+          # compared first, so 2.336.0-otel.999 still loses to 2.337.0-otel.1.
+          #
+          # This replaces a commit sha in that position. A sha is alphanumeric
+          # and therefore unorderable -- nothing consuming these images could
+          # tell a newer build from an older one, which meant no dependency
+          # tooling could ever propose an upgrade. The sha is not lost; it moves
+          # to org.opencontainers.image.revision below, which is where a build
+          # provenance reference belongs.
+          #
+          # GITHUB_RUN_NUMBER is per-workflow and strictly increasing, so the
+          # counter needs no state and cannot collide.
           echo "runner_version=${runner}" >> "$GITHUB_OUTPUT"
-          echo "sha_tag=${runner}-otel.${sha}" >> "$GITHUB_OUTPUT"
+          echo "version_tag=${runner}-otel.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           echo "latest_tag=${runner}-otel.latest" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
@@ -47,5 +61,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/yackey-labs/actions-runner-otel:${{ steps.version.outputs.sha_tag }}
+            ghcr.io/yackey-labs/actions-runner-otel:${{ steps.version.outputs.version_tag }}
             ghcr.io/yackey-labs/actions-runner-otel:${{ steps.version.outputs.latest_tag }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version_tag }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=GitHub Actions runner with OpenTelemetry job/step tracing
+            io.yackey.runner.upstream-version=${{ steps.version.outputs.runner_version }}
