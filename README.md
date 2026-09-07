@@ -1,8 +1,9 @@
 > ## ⚠️ This is a fork
 >
 > **`yackey-labs/actions-runner-otel`** — a fork of [`actions/runner`](https://github.com/actions/runner)
-> that emits an OpenTelemetry trace per job: one root span for the job, one child
-> span per step, following the OTel [CICD](https://opentelemetry.io/docs/specs/semconv/cicd/)
+> that emits an OpenTelemetry trace per **workflow run**: every job in a run shares one
+> trace, with one span per job and one child span per step — following the OTel
+> [CICD](https://opentelemetry.io/docs/specs/semconv/cicd/)
 > and [VCS](https://opentelemetry.io/docs/specs/semconv/attributes-registry/vcs/)
 > semantic conventions.
 >
