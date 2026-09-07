@@ -356,5 +356,122 @@ namespace GitHub.Runner.Common.Tests.Worker
 
             Assert.Equal(default, CiTracing.TryExtractRemoteParent(contextData));
         }
+
+        // ── FromWorkflowRun (derived workflow-run context) ──────────────────────
+
+        private static Dictionary<string, PipelineContextData> GitHubContext(
+            string repository = "yackey-labs/demo",
+            string runId = "12345",
+            string runAttempt = "1")
+        {
+            var github = new DictionaryContextData();
+            if (repository != null) { github.Add("repository", new StringContextData(repository)); }
+            if (runId != null) { github.Add("run_id", new StringContextData(runId)); }
+            if (runAttempt != null) { github.Add("run_attempt", new StringContextData(runAttempt)); }
+            return new Dictionary<string, PipelineContextData>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["github"] = github,
+            };
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_DerivesContext_FromWorkflowRun()
+        {
+            var result = CiTracing.TryExtractRemoteParent(GitHubContext());
+
+            Assert.NotEqual(default, result);
+            Assert.True(result.IsRemote);
+            Assert.NotEqual(default, result.TraceId);
+            Assert.NotEqual(default, result.SpanId);
+            // The span id must not simply be a prefix of the trace id.
+            Assert.False(result.TraceId.ToHexString().StartsWith(result.SpanId.ToHexString(), StringComparison.Ordinal));
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_DerivationIsDeterministic_AcrossJobsOfSameRun()
+        {
+            // Two jobs of the same run derive independently, with no coordination.
+            var a = CiTracing.TryExtractRemoteParent(GitHubContext());
+            var b = CiTracing.TryExtractRemoteParent(GitHubContext());
+
+            Assert.Equal(a.TraceId, b.TraceId);
+            Assert.Equal(a.SpanId, b.SpanId);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_DerivationDiffers_PerRunPerAttemptPerRepo()
+        {
+            var baseline = CiTracing.TryExtractRemoteParent(GitHubContext());
+
+            Assert.NotEqual(baseline.TraceId, CiTracing.TryExtractRemoteParent(GitHubContext(runId: "99999")).TraceId);
+            Assert.NotEqual(baseline.TraceId, CiTracing.TryExtractRemoteParent(GitHubContext(runAttempt: "2")).TraceId);
+            Assert.NotEqual(baseline.TraceId, CiTracing.TryExtractRemoteParent(GitHubContext(repository: "yackey-labs/other")).TraceId);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_TreatsMissingRunAttemptAsFirstAttempt()
+        {
+            // Older servers omit run_attempt; the run should still group rather than fall back
+            // to every job starting its own trace.
+            var absent = CiTracing.TryExtractRemoteParent(GitHubContext(runAttempt: null));
+            var explicitOne = CiTracing.TryExtractRemoteParent(GitHubContext(runAttempt: "1"));
+
+            Assert.NotEqual(default, absent);
+            Assert.Equal(explicitOne.TraceId, absent.TraceId);
+            Assert.Equal(explicitOne.SpanId, absent.SpanId);
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_ReturnsDefault_WhenRunIdentityIncomplete()
+        {
+            Assert.Equal(default, CiTracing.TryExtractRemoteParent(GitHubContext(repository: null)));
+            Assert.Equal(default, CiTracing.TryExtractRemoteParent(GitHubContext(runId: null)));
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_PrefersDispatchInputs_OverDerivedWorkflowRun()
+        {
+            var contextData = GitHubContext();
+            var inputs = new DictionaryContextData();
+            inputs.Add("traceparent", new StringContextData("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"));
+            contextData["inputs"] = inputs;
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+
+            Assert.Equal("4bf92f3577b34da6a3ce929d0e0e4736", result.TraceId.ToHexString());
+            Assert.Equal("00f067aa0ba902b7", result.SpanId.ToHexString());
+        }
+
+        [Fact]
+        [Trait("Level", "L0")]
+        [Trait("Category", "Worker")]
+        public void TryExtractRemoteParent_PrefersNeedsOutputs_OverDerivedWorkflowRun()
+        {
+            var contextData = GitHubContext();
+            var outputs = new DictionaryContextData();
+            outputs.Add("traceparent", new StringContextData("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"));
+            var job = new DictionaryContextData();
+            job.Add("outputs", outputs);
+            var needs = new DictionaryContextData();
+            needs.Add("build", job);
+            contextData["needs"] = needs;
+
+            var result = CiTracing.TryExtractRemoteParent(contextData);
+
+            Assert.Equal("0af7651916cd43dd8448eb211c80319c", result.TraceId.ToHexString());
+            Assert.Equal("b7ad6b7169203331", result.SpanId.ToHexString());
+        }
     }
 }

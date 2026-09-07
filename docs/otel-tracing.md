@@ -1,7 +1,7 @@
 # OpenTelemetry tracing
 
-This runner can emit an OpenTelemetry trace per job: one root span for the job and
-one child span per step. Tracing is **opt-in** and configured entirely through the
+This runner can emit an OpenTelemetry trace per **workflow run**: every job in a run
+shares one trace, with one span per job and one child span per step. Tracing is **opt-in** and configured entirely through the
 standard `OTEL_*` environment variables — when no OTLP endpoint is set, the runner
 behaves exactly as upstream and pays no measurable cost.
 
@@ -33,6 +33,37 @@ environment — including the `OTEL_*` exporter configuration set on the runner 
 and the runner overlays this per-step `TRACEPARENT` on top. Any tool that is itself
 OpenTelemetry-instrumented therefore exports to the same collector and parents to its step
 automatically. Tools that are not instrumented are unaffected.
+
+## How jobs in a run are grouped
+
+A runner process handles exactly one job. It cannot see the workflow's start time,
+its sibling jobs, or its conclusion — so no runner can emit a span for the workflow
+itself. What every runner in a run *can* do is independently derive the same trace id
+and the same workflow span id from values they all already have:
+
+    SHA-256("<repository>/<run_id>/<run_attempt>")     -> trace id  (first 16 bytes)
+    SHA-256("<repository>/<run_id>/<run_attempt>/workflow") -> workflow span id (first 8 bytes)
+
+No coordination, no workflow changes, and it works for parallel jobs that have no
+`needs` edge to inherit from. SHA-256 is used here as a distribution function, not for
+security — every input is public.
+
+The workflow span itself is **never emitted**, so these traces have no root. That is
+deliberate. The grouping is the valuable part, and emitting a real root would require a
+`workflow_run`-triggered reporter added to every consuming repository — precisely the
+per-repository wiring this runner exists to avoid. Workflow duration stays derivable
+from the job spans: earliest start to latest end.
+
+Parent resolution runs in this order, first match wins:
+
+1. `inputs.traceparent` — an explicit cross-workflow chain (see below)
+2. `needs.<job>.outputs.traceparent` — an explicit dependency chain within the run
+3. the derived workflow-run context above — the default
+
+**Re-runs.** `run_attempt` is part of the seed, so re-running a whole workflow produces
+a new, separate trace. Re-running a *single failed job* does not increment
+`run_attempt`, so that job rejoins the original run's trace — the intended reading of
+"this job belongs to that workflow run".
 
 ## Cross-workflow trace propagation
 
