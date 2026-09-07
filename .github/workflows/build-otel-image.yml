@@ -96,11 +96,22 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version_tag }}
         run: |
           set -uo pipefail
-          out=$(docker run --rm \
+          NAME="otel-smoke-${GITHUB_RUN_ID}"
+
+          # Bounded, and a timeout is NOT a failure. Runner.Worker's ITerminal registers a
+          # CTRL-C handler that deliberately keeps the process alive, so a bare invocation
+          # may never exit on its own. Everything this check cares about happens in the
+          # first statement of Main; if the assembly closure is broken the process is
+          # already dead by then. So the exit code is ignored entirely -- including 124 --
+          # and the assertion is purely on what was printed.
+          out=$(timeout -k 5 45 docker run --rm --name "$NAME" \
                   --entrypoint /home/runner/bin/Runner.Worker \
                   -e OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
                   -e OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
                   "$IMAGE" 2>&1 || true)
+          # timeout kills the docker CLI, which does not always stop the container.
+          docker rm -f "$NAME" >/dev/null 2>&1 || true
+
           echo "--- Runner.Worker output ---"
           echo "$out"
           echo "----------------------------"
