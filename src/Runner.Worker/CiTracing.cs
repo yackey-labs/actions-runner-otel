@@ -150,13 +150,6 @@ namespace GitHub.Runner.Worker
         /// trace. Jobs are visited in ordinal-sorted name order and the first valid
         /// traceparent wins, so multi-dependency jobs resolve deterministically.
         /// </description></item>
-        /// <item><description>
-        /// A context DERIVED from the workflow run identity — see
-        /// <see cref="FromWorkflowRun"/>. This is the default, and it replaces the previous
-        /// behaviour of every job starting its own trace. It requires no workflow changes
-        /// and no coordination between jobs: parallel jobs with no <c>needs</c> edge still
-        /// land in one trace per workflow run.
-        /// </description></item>
         /// </list>
         ///
         /// Both <c>workflow_call</c> (uses <see cref="DictionaryContextData"/>) and
@@ -176,13 +169,7 @@ namespace GitHub.Runner.Worker
                 return fromInputs;
             }
 
-            var fromNeeds = FromNeedsOutputs(contextData);
-            if (fromNeeds != default)
-            {
-                return fromNeeds;
-            }
-
-            return FromWorkflowRun(contextData);
+            return FromNeedsOutputs(contextData);
         }
 
         // inputs.traceparent / inputs.tracestate (workflow_dispatch & workflow_call).
@@ -238,36 +225,47 @@ namespace GitHub.Runner.Worker
             => string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) || value == "1";
 
         /// <summary>
-        /// Derives a deterministic trace context for the workflow RUN from
-        /// <c>github.repository</c>, <c>github.run_id</c> and <c>github.run_attempt</c>.
+        /// Derives a deterministic <see cref="ActivityLink"/> to the workflow RUN this job
+        /// belongs to, from <c>github.repository</c>, <c>github.run_id</c> and
+        /// <c>github.run_attempt</c>. Returns <see langword="default"/> when the run identity
+        /// is incomplete.
         ///
-        /// A runner process handles exactly one job. It cannot see the workflow's start
-        /// time, its sibling jobs, or its conclusion, so no runner can emit a span for the
-        /// workflow itself. What every runner in a run CAN do is independently compute the
-        /// same identifiers from values all of them already have — no coordination, no
-        /// workflow changes, and it works for parallel jobs that have no <c>needs</c> edge
-        /// to inherit from.
+        /// A LINK, not a parent. CI is not request/response work, and Honeycomb's guidance
+        /// for these shapes is a trace per job related by links, rather than one trace per
+        /// workflow run:
+        /// https://www.honeycomb.io/blog/exotic-trace-shapes
         ///
-        /// The job spans therefore share one trace and hang off a common workflow span id.
-        /// That span is never emitted, so the trace has no root. This is deliberate: the
-        /// grouping is the valuable part, and emitting a real root would require a
-        /// <c>workflow_run</c>-triggered reporter added to every consuming repository —
-        /// which would cost exactly the per-repository wiring this runner exists to avoid.
-        /// Workflow duration remains derivable from the job spans (earliest start to latest
-        /// end).
+        /// An earlier revision made this a parent so a run's jobs shared one trace. That was
+        /// a mistake on two counts. No runner can emit the workflow span itself — a runner
+        /// handles one job and never learns the run's start, its siblings, or its conclusion
+        /// — so every such trace was left with a MISSING ROOT, and Honeycomb documents that
+        /// as the most damaging kind of missing span: queries filtering on is_root do not
+        /// count the trace at all. And it bought nothing, because the job span already
+        /// carries cicd.pipeline.run.id, so "every job in this run" was always one
+        /// GROUP BY away.
+        ///
+        /// As a link the derivation keeps its value — the UI can navigate between a run's
+        /// jobs — while every job span stays a real, queryable root of its own trace.
         ///
         /// SHA-256 is used as a distribution function, not for security: the inputs are all
         /// public. Trace and span ids are drawn from DIFFERENT hashes so the span id is not
         /// a prefix of the trace id.
         ///
         /// Note on re-runs: <c>run_attempt</c> is part of the input, so re-running a whole
-        /// workflow produces a new, separate trace. Re-running a SINGLE failed job does not
-        /// increment <c>run_attempt</c>, so that job rejoins the original run's trace —
-        /// which is the intended reading of "this job belongs to that workflow run".
+        /// workflow links to a different run. Re-running a SINGLE failed job does not
+        /// increment <c>run_attempt</c>, so that job links back to the original run — which
+        /// is the intended reading of "this job belongs to that workflow run".
         /// </summary>
+        public static ActivityLink WorkflowRunLink(IDictionary<string, PipelineContextData> contextData)
+        {
+            var ctx = FromWorkflowRun(contextData);
+            return ctx == default ? default : new ActivityLink(ctx);
+        }
+
         private static ActivityContext FromWorkflowRun(IDictionary<string, PipelineContextData> contextData)
         {
-            if (!contextData.TryGetValue("github", out var githubRaw) ||
+            if (contextData == null ||
+                !contextData.TryGetValue("github", out var githubRaw) ||
                 githubRaw is not IReadOnlyObject github)
             {
                 return default;

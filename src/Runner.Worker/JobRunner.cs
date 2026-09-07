@@ -120,12 +120,25 @@ namespace GitHub.Runner.Worker
             // recorded in the finally block below.
             //
             // If the job was dispatched with a W3C traceparent input (workflow_dispatch or
-            // workflow_call), start the span as a child of that remote context so cross-workflow
-            // runs stitch into a single trace.
+            // workflow_call), or a dependency job exported one, start the span as a child of
+            // that remote context so an explicit chain stitches into a single trace.
+            // Otherwise the job span is the root of its own trace -- one trace per job, which
+            // is the shape Honeycomb recommends for work that is not request/response
+            // (https://www.honeycomb.io/blog/exotic-trace-shapes) and which keeps every job
+            // queryable via is_root.
+            //
+            // Either way the span carries a LINK to its workflow run, derived identically by
+            // every job in the run, so the UI can navigate between sibling jobs without
+            // forcing them into one trace behind a root that no runner is able to emit.
             ActivityContext remoteParent = CiTracing.TryExtractRemoteParent(message.ContextData);
-            using Activity jobActivity = remoteParent != default
-                ? CiTracing.Source.StartActivity(message.JobDisplayName ?? "job", ActivityKind.Server, remoteParent)
-                : CiTracing.Source.StartActivity(message.JobDisplayName ?? "job", ActivityKind.Server);
+            ActivityLink workflowLink = CiTracing.WorkflowRunLink(message.ContextData);
+            ActivityLink[] links = workflowLink == default ? null : new[] { workflowLink };
+            using Activity jobActivity = CiTracing.Source.StartActivity(
+                message.JobDisplayName ?? "job",
+                ActivityKind.Server,
+                remoteParent,
+                tags: null,
+                links: links);
             try
             {
                 // Create the job execution context.
